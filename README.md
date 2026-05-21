@@ -7,7 +7,8 @@ Dashboard PWA percuma untuk monitor prestasi Shopee Affiliate cookies dari fail 
 1. Buka dashboard.
 2. Upload fail CSV Ads dan Affiliate Commission.
 3. Semak KPI, ranking ad, isu tracking, dan action recommendation.
-4. Simpan snapshot kalau mahu compare report lama vs report baru.
+4. Semak Hold Rate / Cookie Delay untuk tahu berapa lama dari click sampai order.
+5. Simpan snapshot kalau mahu compare report lama vs report baru.
 
 CSV diproses dalam browser sahaja. Jangan commit fail CSV sebenar ke repo.
 

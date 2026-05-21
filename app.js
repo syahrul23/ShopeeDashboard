@@ -274,6 +274,123 @@
       .map(([key, set]) => ({ field, key, variants: [...set] }));
   }
 
+  function parseDateTime(value) {
+    const raw = String(value == null ? "" : value).trim();
+    if (!raw) return null;
+    const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/);
+    if (match) {
+      const [, year, month, day, hour, minute, second = "0"] = match;
+      const date = new Date(
+        Number(year),
+        Number(month) - 1,
+        Number(day),
+        Number(hour),
+        Number(minute),
+        Number(second)
+      );
+      return Number.isFinite(date.getTime()) ? date : null;
+    }
+    const fallback = new Date(raw);
+    return Number.isFinite(fallback.getTime()) ? fallback : null;
+  }
+
+  function median(values) {
+    if (!values.length) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    if (sorted.length % 2) return sorted[mid];
+    return (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+
+  function buildHoldAnalysis(rows) {
+    const orders = new Map();
+    let missingTimeRows = 0;
+    let invalidTimeOrders = 0;
+    const buckets = [
+      { key: "0-15 min", maxMs: 15 * 60 * 1000, orders: 0, purchaseValue: 0, expectedCommission: 0 },
+      { key: "15 min-1 jam", maxMs: 60 * 60 * 1000, orders: 0, purchaseValue: 0, expectedCommission: 0 },
+      { key: "1-6 jam", maxMs: 6 * 60 * 60 * 1000, orders: 0, purchaseValue: 0, expectedCommission: 0 },
+      { key: "6-24 jam", maxMs: 24 * 60 * 60 * 1000, orders: 0, purchaseValue: 0, expectedCommission: 0 },
+      { key: "1-3 hari", maxMs: 3 * 24 * 60 * 60 * 1000, orders: 0, purchaseValue: 0, expectedCommission: 0 },
+      { key: "3-7 hari", maxMs: 7 * 24 * 60 * 60 * 1000, orders: 0, purchaseValue: 0, expectedCommission: 0 },
+      { key: "7 hari+", maxMs: Infinity, orders: 0, purchaseValue: 0, expectedCommission: 0 }
+    ];
+
+    rows.forEach((row) => {
+      const clickTime = parseDateTime(getField(row, "Click Time"));
+      const orderTime = parseDateTime(getField(row, "Order Time"));
+      if (!clickTime || !orderTime) {
+        missingTimeRows += 1;
+        return;
+      }
+      const orderId = String(getField(row, "Order id") || commissionKey(row)).trim();
+      const current = orders.get(orderId) || {
+        orderId,
+        clickTime,
+        orderTime,
+        purchaseValue: 0,
+        expectedCommission: 0,
+        items: 0
+      };
+      if (clickTime.getTime() < current.clickTime.getTime()) current.clickTime = clickTime;
+      if (orderTime.getTime() < current.orderTime.getTime()) current.orderTime = orderTime;
+      current.purchaseValue += parseNumber(getField(row, "Purchase Value(RM)"));
+      current.expectedCommission += parseNumber(getField(row, "Affiliate Net Commission(RM)"));
+      current.items += 1;
+      orders.set(orderId, current);
+    });
+
+    const durations = [];
+    const invalidOrders = [];
+    const validOrders = [];
+    orders.forEach((order) => {
+      const holdMs = order.orderTime.getTime() - order.clickTime.getTime();
+      if (holdMs < 0) {
+        invalidTimeOrders += 1;
+        invalidOrders.push(order);
+        return;
+      }
+      durations.push(holdMs);
+      validOrders.push({ ...order, holdMs });
+      const bucket = buckets.find((item) => holdMs <= item.maxMs) || buckets[buckets.length - 1];
+      bucket.orders += 1;
+      bucket.purchaseValue += order.purchaseValue;
+      bucket.expectedCommission += order.expectedCommission;
+    });
+
+    const totalOrders = validOrders.length;
+    const totalCommission = validOrders.reduce((sum, order) => sum + order.expectedCommission, 0);
+    const totalPurchaseValue = validOrders.reduce((sum, order) => sum + order.purchaseValue, 0);
+    const sameHourOrders = validOrders.filter((order) => order.holdMs <= 60 * 60 * 1000).length;
+    const sameDayOrders = validOrders.filter((order) => order.holdMs <= 24 * 60 * 60 * 1000).length;
+    const delayedOrders = validOrders.filter((order) => order.holdMs > 24 * 60 * 60 * 1000).length;
+
+    return {
+      totalOrders,
+      missingTimeRows,
+      invalidTimeOrders,
+      avgMs: safeDivide(durations.reduce((sum, value) => sum + value, 0), durations.length),
+      medianMs: median(durations),
+      shortestMs: durations.length ? Math.min(...durations) : 0,
+      longestMs: durations.length ? Math.max(...durations) : 0,
+      sameHourRate: safeDivide(sameHourOrders, totalOrders),
+      sameDayRate: safeDivide(sameDayOrders, totalOrders),
+      delayedRate: safeDivide(delayedOrders, totalOrders),
+      totalPurchaseValue,
+      totalCommission,
+      buckets: buckets.map((bucket) => ({
+        key: bucket.key,
+        orders: bucket.orders,
+        purchaseValue: bucket.purchaseValue,
+        expectedCommission: bucket.expectedCommission,
+        rate: safeDivide(bucket.orders, totalOrders),
+        commissionShare: safeDivide(bucket.expectedCommission, totalCommission),
+        purchaseValueShare: safeDivide(bucket.purchaseValue, totalPurchaseValue)
+      })),
+      invalidOrders: invalidOrders.map((order) => order.orderId)
+    };
+  }
+
   function computeAnalysis(adsRows, commissionRows, meta) {
     const adsByAd = new Map();
     const adsTotals = {
@@ -432,6 +549,8 @@
       }))
       .sort((a, b) => b.spend - a.spend);
 
+    const hold = buildHoldAnalysis(expectedRows);
+
     const expectedCommission = commissionTotals.expectedCommission;
     const purchaseValue = commissionTotals.purchaseValue;
     const summary = {
@@ -477,6 +596,12 @@
         detail: `${issue.variants.join(" / ")} patut diseragamkan.`
       });
     });
+    if (hold.missingTimeRows > 0) {
+      issues.push({ level: "warning", title: "Missing hold time", detail: `${hold.missingTimeRows} commission row tiada Click Time atau Order Time.` });
+    }
+    if (hold.invalidTimeOrders > 0) {
+      issues.push({ level: "warning", title: "Invalid hold time", detail: `${hold.invalidTimeOrders} order ada Order Time lebih awal daripada Click Time.` });
+    }
 
     return {
       version: CORE_VERSION,
@@ -487,6 +612,7 @@
       attribution,
       categories,
       products,
+      hold,
       audience: audienceRows,
       issues
     };
@@ -553,6 +679,16 @@
 
   function formatPercent(value) {
     return `${formatDecimal((Number.isFinite(value) ? value : 0) * 100)}%`;
+  }
+
+  function formatDuration(ms) {
+    const totalMinutes = Math.max(0, Math.round(safeDivide(ms, 60 * 1000)));
+    const days = Math.floor(totalMinutes / (24 * 60));
+    const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+    const minutes = totalMinutes % 60;
+    if (days > 0) return `${days} hari ${hours} jam`;
+    if (hours > 0) return `${hours} jam ${minutes} min`;
+    return `${minutes} min`;
   }
 
   function htmlEscape(value) {
@@ -628,6 +764,8 @@
       ["Purchase Value", formatMoney(summary.commission.purchaseValue), `GMV ROAS ${formatDecimal(summary.commission.gmvRoas)}`],
       ["Pending Commission", formatMoney(summary.commission.pendingCommission), "Belum confirmed"],
       ["Completed Commission", formatMoney(summary.commission.completedCommission), "Confirmed risk check"],
+      ["Avg Hold Time", formatDuration(analysis.hold.avgMs), `${formatPercent(analysis.hold.sameDayRate)} same-day`],
+      ["Delayed Orders", formatPercent(analysis.hold.delayedRate), ">24 jam selepas click"],
       ["Break-even GMV", formatMoney(summary.ads.spend / Math.max(summary.commission.avgCommissionRate, 0.000001)), `Need ROAS ${formatDecimal(summary.commission.breakEvenGmvRoas)}`],
       ["Cancelled", formatNumber(summary.commission.cancelledOrders), `${summary.commission.cancelledItems} item rows`]
     ];
@@ -670,6 +808,28 @@
       { label: "Rate", num: true, render: (row) => formatPercent(row.avgCommissionRate) },
       { label: "Bar", render: (row) => bar(row.expectedCommission, maxCategory) }
     ], analysis.categories, "Tiada data category.");
+
+    const maxHoldOrders = Math.max(...analysis.hold.buckets.map((row) => row.orders), 1);
+    document.getElementById("holdSummary").innerHTML = [
+      ["Orders With Time", formatNumber(analysis.hold.totalOrders), "Click Time -> Order Time"],
+      ["Average Hold", formatDuration(analysis.hold.avgMs), `Median ${formatDuration(analysis.hold.medianMs)}`],
+      ["Same-hour Rate", formatPercent(analysis.hold.sameHourRate), "Order dalam 1 jam"],
+      ["Same-day Rate", formatPercent(analysis.hold.sameDayRate), "Order dalam 24 jam"],
+      ["Delayed Rate", formatPercent(analysis.hold.delayedRate), "Order selepas 24 jam"],
+      ["Longest Hold", formatDuration(analysis.hold.longestMs), "Cookie delay paling lama"]
+    ].map(([label, value, note]) => (
+      `<article class="metric-card"><span>${htmlEscape(label)}</span><strong>${htmlEscape(value)}</strong><small>${htmlEscape(note)}</small></article>`
+    )).join("");
+
+    renderTable(document.getElementById("holdTable"), [
+      { label: "Hold Bucket", render: (row) => htmlEscape(row.key) },
+      { label: "Orders", num: true, render: (row) => formatNumber(row.orders) },
+      { label: "Hold Rate", num: true, render: (row) => formatPercent(row.rate) },
+      { label: "PV", num: true, render: (row) => formatMoney(row.purchaseValue) },
+      { label: "Comm", num: true, render: (row) => formatMoney(row.expectedCommission) },
+      { label: "Comm Share", num: true, render: (row) => formatPercent(row.commissionShare) },
+      { label: "Signal", render: (row) => `<div class="bar-cell">${bar(row.orders, maxHoldOrders)}</div>` }
+    ], analysis.hold.buckets, "Tiada data hold rate.");
 
     renderTable(document.getElementById("audienceTable"), [
       { label: "Age", render: (row) => htmlEscape(row.age) },
@@ -865,6 +1025,8 @@
       document.getElementById("adTable").innerHTML = "";
       document.getElementById("attributionTable").innerHTML = "";
       document.getElementById("categoryTable").innerHTML = "";
+      document.getElementById("holdSummary").innerHTML = "";
+      document.getElementById("holdTable").innerHTML = "";
       document.getElementById("audienceTable").innerHTML = "";
       document.getElementById("issuesList").innerHTML = "";
       renderSnapshots(null);
