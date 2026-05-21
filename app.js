@@ -1,0 +1,899 @@
+(function () {
+  "use strict";
+
+  const STORAGE_KEY = "shopeeDashboardSnapshots:v1";
+  const CORE_VERSION = "1.0.0";
+
+  const ADS_COLUMNS = ["Ad name", "Amount spent (MYR)", "Link clicks"];
+  const COMMISSION_COLUMNS = ["Order id", "Affiliate Net Commission(RM)", "Sub_id4"];
+
+  const money = new Intl.NumberFormat("ms-MY", {
+    style: "currency",
+    currency: "MYR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+
+  const num = new Intl.NumberFormat("ms-MY", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0
+  });
+
+  const decimal = new Intl.NumberFormat("ms-MY", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+
+  function cleanHeader(value) {
+    return String(value || "").replace(/^\uFEFF/, "").trim();
+  }
+
+  function normalizeKey(value) {
+    return cleanHeader(value).toLowerCase();
+  }
+
+  function parseCsv(text) {
+    const source = String(text || "").replace(/^\uFEFF/, "");
+    const rows = [];
+    let row = [];
+    let field = "";
+    let inQuotes = false;
+
+    for (let i = 0; i < source.length; i += 1) {
+      const char = source[i];
+      const next = source[i + 1];
+
+      if (char === "\"") {
+        if (inQuotes && next === "\"") {
+          field += "\"";
+          i += 1;
+        } else {
+          inQuotes = !inQuotes;
+        }
+        continue;
+      }
+
+      if (char === "," && !inQuotes) {
+        row.push(field);
+        field = "";
+        continue;
+      }
+
+      if ((char === "\n" || char === "\r") && !inQuotes) {
+        if (char === "\r" && next === "\n") i += 1;
+        row.push(field);
+        field = "";
+        if (row.some((cell) => String(cell).trim() !== "")) rows.push(row);
+        row = [];
+        continue;
+      }
+
+      field += char;
+    }
+
+    row.push(field);
+    if (row.some((cell) => String(cell).trim() !== "")) rows.push(row);
+
+    const headers = (rows.shift() || []).map(cleanHeader);
+    const records = rows.map((cells) => {
+      const record = {};
+      headers.forEach((header, index) => {
+        record[header] = cells[index] == null ? "" : String(cells[index]).trim();
+      });
+      return record;
+    });
+
+    return { headers, rows: records };
+  }
+
+  function hasColumns(headers, required) {
+    const lookup = new Set(headers.map(normalizeKey));
+    return required.every((column) => lookup.has(normalizeKey(column)));
+  }
+
+  function detectFile(parsed) {
+    if (hasColumns(parsed.headers, ADS_COLUMNS)) return "ads";
+    if (hasColumns(parsed.headers, COMMISSION_COLUMNS)) return "commission";
+    return "unknown";
+  }
+
+  function getField(row, names) {
+    const candidates = Array.isArray(names) ? names : [names];
+    const keys = Object.keys(row || {});
+    for (const name of candidates) {
+      const wanted = normalizeKey(name);
+      const match = keys.find((key) => normalizeKey(key) === wanted);
+      if (match) return row[match];
+    }
+    return "";
+  }
+
+  function parseNumber(value) {
+    if (value == null) return 0;
+    const raw = String(value).trim();
+    if (!raw || raw === "-") return 0;
+    const negative = raw.startsWith("(") && raw.endsWith(")");
+    const cleaned = raw.replace(/[(),%A-Za-z\s]/g, "").replace(/RM/g, "");
+    const parsed = Number.parseFloat(cleaned);
+    if (!Number.isFinite(parsed)) return 0;
+    return negative ? -parsed : parsed;
+  }
+
+  function safeDivide(a, b) {
+    return b ? a / b : 0;
+  }
+
+  function normalizeAdNo(value) {
+    const raw = String(value == null ? "" : value).trim();
+    if (!raw) return "";
+    const withoutDecimal = raw.endsWith(".0") ? raw.slice(0, -2) : raw;
+    const parsed = Number.parseInt(withoutDecimal, 10);
+    if (Number.isFinite(parsed) && String(parsed) === withoutDecimal.replace(/^0+/, "") || withoutDecimal === "0") {
+      return String(parsed);
+    }
+    if (/^\d+$/.test(withoutDecimal)) return String(Number.parseInt(withoutDecimal, 10));
+    return withoutDecimal;
+  }
+
+  function normalizeSubId4(value) {
+    const raw = String(value == null ? "" : value).trim();
+    if (!raw) return "";
+    const withoutDecimal = raw.endsWith(".0") ? raw.slice(0, -2) : raw;
+    if (!/^\d+$/.test(withoutDecimal)) return "";
+    return String(Number.parseInt(withoutDecimal, 10));
+  }
+
+  function simpleHash(input) {
+    let hash = 2166136261;
+    for (let i = 0; i < input.length; i += 1) {
+      hash ^= input.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
+  }
+
+  function fingerprintRows(headers, rows) {
+    const sortedHeaders = headers.map(cleanHeader).sort((a, b) => a.localeCompare(b));
+    const canonicalRows = rows
+      .map((row) => sortedHeaders.map((header) => String(row[header] || "").trim()).join("\u001f"))
+      .sort();
+    return simpleHash(`${sortedHeaders.join("\u001e")}\u001d${canonicalRows.join("\u001c")}`);
+  }
+
+  function commissionKey(row) {
+    const parts = [
+      getField(row, "Order id"),
+      getField(row, "Conversion id"),
+      getField(row, "Item id"),
+      getField(row, "Model id")
+    ].map((part) => String(part || "").trim());
+    const useful = parts.filter(Boolean);
+    return useful.length ? useful.join("|") : JSON.stringify(row);
+  }
+
+  function groupInit() {
+    return {
+      orders: new Set(),
+      items: 0,
+      purchaseValue: 0,
+      expectedCommission: 0,
+      completedCommission: 0,
+      pendingCommission: 0,
+      completedOrders: new Set(),
+      pendingOrders: new Set()
+    };
+  }
+
+  function addCommissionGroup(group, row, status) {
+    const orderId = String(getField(row, "Order id") || "").trim();
+    const purchase = parseNumber(getField(row, "Purchase Value(RM)"));
+    const commission = parseNumber(getField(row, "Affiliate Net Commission(RM)"));
+    group.items += 1;
+    group.purchaseValue += purchase;
+    group.expectedCommission += commission;
+    if (orderId) group.orders.add(orderId);
+    if (status === "completed") {
+      group.completedCommission += commission;
+      if (orderId) group.completedOrders.add(orderId);
+    }
+    if (status === "pending") {
+      group.pendingCommission += commission;
+      if (orderId) group.pendingOrders.add(orderId);
+    }
+  }
+
+  function statusType(row) {
+    const status = String(getField(row, ["Affiliate Item Status", "Order Status"]) || "").trim().toLowerCase();
+    if (status.includes("cancel")) return "cancelled";
+    if (status.includes("complete")) return "completed";
+    if (status.includes("pending")) return "pending";
+    return status || "unknown";
+  }
+
+  function groupBy(rows, keyFn, rowFn) {
+    const map = new Map();
+    rows.forEach((row) => {
+      const key = keyFn(row);
+      if (!key) return;
+      if (!map.has(key)) map.set(key, groupInit());
+      rowFn(map.get(key), row);
+    });
+    return map;
+  }
+
+  function serializeGroup(key, group, extra = {}) {
+    const purchaseValue = group.purchaseValue;
+    const expectedCommission = group.expectedCommission;
+    return {
+      key,
+      orders: group.orders.size,
+      items: group.items,
+      purchaseValue,
+      expectedCommission,
+      completedCommission: group.completedCommission,
+      pendingCommission: group.pendingCommission,
+      avgCommissionRate: safeDivide(expectedCommission, purchaseValue),
+      ...extra
+    };
+  }
+
+  function actionForAd(row, totalSpend) {
+    if (!row.spend && row.expectedCommission > 0) {
+      return { label: "Tracking Only", tone: "tracking", note: "Ada komisyen tetapi tiada Ads row dipadankan." };
+    }
+    if (row.commissionRoas >= 1 && (row.orders >= 2 || row.linkClicks >= 100)) {
+      return { label: "Scale", tone: "scale", note: "ROAS komisyen sudah lepas break-even." };
+    }
+    if (row.expectedCommission > 0) {
+      const highSpend = row.spend >= Math.max(10, totalSpend * 0.1);
+      if (row.commissionRoas < 0.2 && highSpend) {
+        return { label: "Cut Budget", tone: "cut", note: "Ada komisyen tetapi spend terlalu berat." };
+      }
+      if (row.commissionRoas >= 0.4) {
+        return { label: "Protect/Test More", tone: "protect", note: "Relatif kuat, tambah data sebelum scale." };
+      }
+      return { label: "Optimize", tone: "optimize", note: "Ada order, tapi belum cukup dekat break-even." };
+    }
+    if (row.spend >= 5 || row.linkClicks >= 40) {
+      return { label: "Pause/Kill", tone: "pause", note: "Spend/klik sudah jalan tanpa komisyen." };
+    }
+    return { label: "Observe", tone: "observe", note: "Data masih kecil." };
+  }
+
+  function buildCasingIssues(rows, field) {
+    const variants = new Map();
+    rows.forEach((row) => {
+      const value = String(getField(row, field) || "").trim();
+      if (!value) return;
+      const key = value.toLowerCase();
+      if (!variants.has(key)) variants.set(key, new Set());
+      variants.get(key).add(value);
+    });
+    return [...variants.entries()]
+      .filter(([, set]) => set.size > 1)
+      .map(([key, set]) => ({ field, key, variants: [...set] }));
+  }
+
+  function computeAnalysis(adsRows, commissionRows, meta) {
+    const adsByAd = new Map();
+    const adsTotals = {
+      spend: 0,
+      impressions: 0,
+      reach: 0,
+      linkClicks: 0,
+      clicksAll: 0
+    };
+
+    adsRows.forEach((row) => {
+      const adNo = normalizeAdNo(getField(row, "Ad name")) || "Unknown";
+      const current = adsByAd.get(adNo) || {
+        adNo,
+        spend: 0,
+        impressions: 0,
+        reach: 0,
+        linkClicks: 0,
+        clicksAll: 0
+      };
+      current.spend += parseNumber(getField(row, "Amount spent (MYR)"));
+      current.impressions += parseNumber(getField(row, "Impressions"));
+      current.reach += parseNumber(getField(row, "Reach"));
+      current.linkClicks += parseNumber(getField(row, "Link clicks"));
+      current.clicksAll += parseNumber(getField(row, "Clicks (all)"));
+      adsByAd.set(adNo, current);
+    });
+
+    adsByAd.forEach((row) => {
+      adsTotals.spend += row.spend;
+      adsTotals.impressions += row.impressions;
+      adsTotals.reach += row.reach;
+      adsTotals.linkClicks += row.linkClicks;
+      adsTotals.clicksAll += row.clicksAll;
+    });
+
+    const expectedRows = [];
+    const cancelledRows = [];
+    const unmappedRows = [];
+
+    commissionRows.forEach((row) => {
+      const status = statusType(row);
+      if (status === "cancelled") {
+        cancelledRows.push(row);
+        return;
+      }
+      expectedRows.push(row);
+      const subid = String(getField(row, "Sub_id4") || "").trim();
+      if (subid && !normalizeSubId4(subid)) unmappedRows.push(row);
+    });
+
+    const totalsGroup = groupInit();
+    expectedRows.forEach((row) => addCommissionGroup(totalsGroup, row, statusType(row)));
+
+    const commissionTotals = serializeGroup("Total", totalsGroup, {
+      cancelledItems: cancelledRows.length,
+      cancelledOrders: new Set(cancelledRows.map((row) => getField(row, "Order id")).filter(Boolean)).size
+    });
+
+    const commissionByAd = groupBy(
+      expectedRows,
+      (row) => normalizeSubId4(getField(row, "Sub_id4")),
+      (group, row) => addCommissionGroup(group, row, statusType(row))
+    );
+
+    const adKeys = new Set([...adsByAd.keys(), ...commissionByAd.keys()]);
+    const perAd = [...adKeys].map((adNo) => {
+      const ads = adsByAd.get(adNo) || {
+        adNo,
+        spend: 0,
+        impressions: 0,
+        reach: 0,
+        linkClicks: 0,
+        clicksAll: 0
+      };
+      const group = commissionByAd.get(adNo) || groupInit();
+      const row = {
+        adNo,
+        spend: ads.spend,
+        impressions: ads.impressions,
+        reach: ads.reach,
+        linkClicks: ads.linkClicks,
+        clicksAll: ads.clicksAll,
+        ctrLink: safeDivide(ads.linkClicks, ads.impressions),
+        cpcLink: safeDivide(ads.spend, ads.linkClicks),
+        cpm: safeDivide(ads.spend, ads.impressions) * 1000,
+        orders: group.orders.size,
+        items: group.items,
+        purchaseValue: group.purchaseValue,
+        expectedCommission: group.expectedCommission,
+        completedCommission: group.completedCommission,
+        pendingCommission: group.pendingCommission,
+        avgCommissionRate: safeDivide(group.expectedCommission, group.purchaseValue),
+        commissionRoas: safeDivide(group.expectedCommission, ads.spend),
+        gmvRoas: safeDivide(group.purchaseValue, ads.spend),
+        roi: safeDivide(group.expectedCommission - ads.spend, ads.spend),
+        epc: safeDivide(group.expectedCommission, ads.linkClicks),
+        cpa: safeDivide(ads.spend, group.orders.size),
+        orderCvr: safeDivide(group.orders.size, ads.linkClicks)
+      };
+      row.action = actionForAd(row, adsTotals.spend);
+      return row;
+    }).sort((a, b) => {
+      if (b.commissionRoas !== a.commissionRoas) return b.commissionRoas - a.commissionRoas;
+      return b.expectedCommission - a.expectedCommission;
+    });
+
+    const attributionMap = groupBy(
+      expectedRows,
+      (row) => String(getField(row, "Attribution Type") || "Unknown").trim() || "Unknown",
+      (group, row) => addCommissionGroup(group, row, statusType(row))
+    );
+
+    const categoryMap = groupBy(
+      expectedRows,
+      (row) => String(getField(row, "L1 Global Category") || "Unknown").trim() || "Unknown",
+      (group, row) => addCommissionGroup(group, row, statusType(row))
+    );
+
+    const productMap = groupBy(
+      expectedRows,
+      (row) => String(getField(row, "Item Name") || "Unknown").trim() || "Unknown",
+      (group, row) => addCommissionGroup(group, row, statusType(row))
+    );
+
+    const audience = new Map();
+    adsRows.forEach((row) => {
+      const age = String(getField(row, "Age") || "Unknown").trim() || "Unknown";
+      const gender = String(getField(row, "Gender") || "Unknown").trim() || "Unknown";
+      const key = `${age} | ${gender}`;
+      const current = audience.get(key) || { age, gender, spend: 0, impressions: 0, linkClicks: 0 };
+      current.spend += parseNumber(getField(row, "Amount spent (MYR)"));
+      current.impressions += parseNumber(getField(row, "Impressions"));
+      current.linkClicks += parseNumber(getField(row, "Link clicks"));
+      audience.set(key, current);
+    });
+
+    const attribution = [...attributionMap.entries()]
+      .map(([key, group]) => serializeGroup(key, group))
+      .sort((a, b) => b.expectedCommission - a.expectedCommission);
+
+    const categories = [...categoryMap.entries()]
+      .map(([key, group]) => serializeGroup(key, group))
+      .sort((a, b) => b.expectedCommission - a.expectedCommission);
+
+    const products = [...productMap.entries()]
+      .map(([key, group]) => serializeGroup(key, group))
+      .sort((a, b) => b.expectedCommission - a.expectedCommission)
+      .slice(0, 12);
+
+    const audienceRows = [...audience.values()]
+      .map((row) => ({
+        ...row,
+        ctr: safeDivide(row.linkClicks, row.impressions),
+        cpc: safeDivide(row.spend, row.linkClicks)
+      }))
+      .sort((a, b) => b.spend - a.spend);
+
+    const expectedCommission = commissionTotals.expectedCommission;
+    const purchaseValue = commissionTotals.purchaseValue;
+    const summary = {
+      ads: {
+        ...adsTotals,
+        ctrLink: safeDivide(adsTotals.linkClicks, adsTotals.impressions),
+        cpcLink: safeDivide(adsTotals.spend, adsTotals.linkClicks),
+        cpm: safeDivide(adsTotals.spend, adsTotals.impressions) * 1000,
+        frequency: safeDivide(adsTotals.impressions, adsTotals.reach)
+      },
+      commission: {
+        ...commissionTotals,
+        commissionRoas: safeDivide(expectedCommission, adsTotals.spend),
+        gmvRoas: safeDivide(purchaseValue, adsTotals.spend),
+        roi: safeDivide(expectedCommission - adsTotals.spend, adsTotals.spend),
+        breakEvenGmvRoas: expectedCommission > 0 && purchaseValue > 0 ? 1 / safeDivide(expectedCommission, purchaseValue) : 0
+      }
+    };
+
+    const issues = [];
+    if (!adsRows.length) issues.push({ level: "error", title: "Ads CSV missing", detail: "Tiada fail Ads dikesan dalam upload ini." });
+    if (!commissionRows.length) issues.push({ level: "error", title: "Commission CSV missing", detail: "Tiada fail Affiliate Commission dikesan dalam upload ini." });
+    meta.duplicateAds.forEach((item) => {
+      issues.push({ level: "warning", title: "Duplicate Ads CSV ignored", detail: `${item.name} sama seperti ${item.original}.` });
+    });
+    if (meta.duplicateCommissionRows > 0) {
+      issues.push({ level: "warning", title: "Duplicate commission rows ignored", detail: `${meta.duplicateCommissionRows} row commission duplicate dibuang.` });
+    }
+    meta.unknownFiles.forEach((name) => {
+      issues.push({ level: "warning", title: "Unknown CSV", detail: `${name} tidak match schema Ads atau Commission.` });
+    });
+    unmappedRows.forEach((row) => {
+      issues.push({
+        level: "warning",
+        title: "Unmapped Sub_id4",
+        detail: `Order ${getField(row, "Order id") || "-"} guna Sub_id4="${getField(row, "Sub_id4")}", tidak boleh map kepada ad number.`
+      });
+    });
+    ["Sub_id2", "Sub_id3", "Channel"].flatMap((field) => buildCasingIssues(expectedRows, field)).forEach((issue) => {
+      issues.push({
+        level: "warning",
+        title: `Casing mismatch ${issue.field}`,
+        detail: `${issue.variants.join(" / ")} patut diseragamkan.`
+      });
+    });
+
+    return {
+      version: CORE_VERSION,
+      createdAt: new Date().toISOString(),
+      files: meta.files,
+      summary,
+      perAd,
+      attribution,
+      categories,
+      products,
+      audience: audienceRows,
+      issues
+    };
+  }
+
+  function analyzeUploads(filePayloads) {
+    const adsFingerprints = new Map();
+    const commissionKeys = new Set();
+    const adsRows = [];
+    const commissionRows = [];
+    const meta = {
+      files: [],
+      duplicateAds: [],
+      duplicateCommissionRows: 0,
+      unknownFiles: []
+    };
+
+    filePayloads.forEach((file) => {
+      const parsed = parseCsv(file.text);
+      const type = detectFile(parsed);
+      meta.files.push({ name: file.name, type, rows: parsed.rows.length });
+
+      if (type === "ads") {
+        const fingerprint = fingerprintRows(parsed.headers, parsed.rows);
+        if (adsFingerprints.has(fingerprint)) {
+          meta.duplicateAds.push({ name: file.name, original: adsFingerprints.get(fingerprint) });
+          return;
+        }
+        adsFingerprints.set(fingerprint, file.name);
+        adsRows.push(...parsed.rows);
+        return;
+      }
+
+      if (type === "commission") {
+        parsed.rows.forEach((row) => {
+          const key = commissionKey(row);
+          if (commissionKeys.has(key)) {
+            meta.duplicateCommissionRows += 1;
+            return;
+          }
+          commissionKeys.add(key);
+          commissionRows.push(row);
+        });
+        return;
+      }
+
+      meta.unknownFiles.push(file.name);
+    });
+
+    return computeAnalysis(adsRows, commissionRows, meta);
+  }
+
+  function formatMoney(value) {
+    return money.format(Number.isFinite(value) ? value : 0);
+  }
+
+  function formatNumber(value) {
+    return num.format(Number.isFinite(value) ? value : 0);
+  }
+
+  function formatDecimal(value) {
+    return decimal.format(Number.isFinite(value) ? value : 0);
+  }
+
+  function formatPercent(value) {
+    return `${formatDecimal((Number.isFinite(value) ? value : 0) * 100)}%`;
+  }
+
+  function htmlEscape(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function renderTable(container, columns, rows, emptyText) {
+    if (!container) return;
+    if (!rows.length) {
+      container.innerHTML = `<p class="empty-state">${htmlEscape(emptyText || "Tiada data.")}</p>`;
+      return;
+    }
+    const header = columns.map((column) => `<th class="${column.num ? "num" : ""}">${htmlEscape(column.label)}</th>`).join("");
+    const body = rows.map((row) => {
+      const cells = columns.map((column) => {
+        const value = column.render ? column.render(row) : row[column.key];
+        return `<td class="${column.num ? "num" : ""}">${value}</td>`;
+      }).join("");
+      return `<tr>${cells}</tr>`;
+    }).join("");
+    container.innerHTML = `<table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>`;
+  }
+
+  function badge(action) {
+    const tone = action && action.tone ? action.tone : "observe";
+    const label = action && action.label ? action.label : "Observe";
+    return `<span class="badge ${htmlEscape(tone)}">${htmlEscape(label)}</span>`;
+  }
+
+  function bar(value, max) {
+    const width = max > 0 ? Math.max(0, Math.min(100, (value / max) * 100)) : 0;
+    return `<div class="bar-track"><div class="bar-fill" style="width:${width.toFixed(1)}%"></div></div>`;
+  }
+
+  function verdictForAnalysis(analysis) {
+    const roas = analysis.summary.commission.commissionRoas;
+    const roi = analysis.summary.commission.roi;
+    if (roas >= 1) return { tone: "profit", text: `Untung. Commission ROAS ${formatDecimal(roas)} dan ROI ${formatPercent(roi)}.` };
+    if (roas >= 0.5) return { tone: "watch", text: `Belum break-even, tapi ada traction. Commission ROAS ${formatDecimal(roas)}.` };
+    return { tone: "loss", text: `Rugi. Commission ROAS ${formatDecimal(roas)} dan ROI ${formatPercent(roi)}.` };
+  }
+
+  function renderAnalysis(analysis) {
+    const summary = analysis.summary;
+    const verdict = verdictForAnalysis(analysis);
+    const statusPanel = document.getElementById("statusPanel");
+    statusPanel.className = `status-panel ${verdict.tone}`;
+    document.getElementById("statusMessage").textContent = verdict.text;
+
+    document.getElementById("kpiSpend").textContent = formatMoney(summary.ads.spend);
+    document.getElementById("kpiTraffic").textContent = `${formatNumber(summary.ads.linkClicks)} link clicks | CPC ${formatMoney(summary.ads.cpcLink)}`;
+    document.getElementById("kpiExpected").textContent = formatMoney(summary.commission.expectedCommission);
+    document.getElementById("kpiCompleted").textContent = `Completed ${formatMoney(summary.commission.completedCommission)}`;
+    document.getElementById("kpiRoas").textContent = formatDecimal(summary.commission.commissionRoas);
+    document.getElementById("kpiRoi").textContent = `ROI ${formatPercent(summary.commission.roi)}`;
+    document.getElementById("kpiBeRoas").textContent = formatDecimal(summary.commission.breakEvenGmvRoas);
+    document.getElementById("kpiRate").textContent = `Avg rate ${formatPercent(summary.commission.avgCommissionRate)}`;
+
+    const line = summary.commission.commissionRoas < 1
+      ? `Setiap RM1 ads baru balik ${formatMoney(summary.commission.commissionRoas)} komisyen.`
+      : "Campaign sudah lepas modal berdasarkan expected commission.";
+    document.getElementById("summaryLine").textContent = line;
+
+    const metrics = [
+      ["Impressions", formatNumber(summary.ads.impressions), `Reach ${formatNumber(summary.ads.reach)}`],
+      ["CTR Link", formatPercent(summary.ads.ctrLink), `CPM ${formatMoney(summary.ads.cpm)}`],
+      ["Orders Expected", formatNumber(summary.commission.orders), `${summary.commission.items} item rows`],
+      ["Purchase Value", formatMoney(summary.commission.purchaseValue), `GMV ROAS ${formatDecimal(summary.commission.gmvRoas)}`],
+      ["Pending Commission", formatMoney(summary.commission.pendingCommission), "Belum confirmed"],
+      ["Completed Commission", formatMoney(summary.commission.completedCommission), "Confirmed risk check"],
+      ["Break-even GMV", formatMoney(summary.ads.spend / Math.max(summary.commission.avgCommissionRate, 0.000001)), `Need ROAS ${formatDecimal(summary.commission.breakEvenGmvRoas)}`],
+      ["Cancelled", formatNumber(summary.commission.cancelledOrders), `${summary.commission.cancelledItems} item rows`]
+    ];
+
+    document.getElementById("summaryGrid").innerHTML = metrics.map(([label, value, note]) => (
+      `<article class="metric-card"><span>${htmlEscape(label)}</span><strong>${htmlEscape(value)}</strong><small>${htmlEscape(note)}</small></article>`
+    )).join("");
+
+    const maxAdRoas = Math.max(...analysis.perAd.map((row) => row.commissionRoas), 1);
+    renderTable(document.getElementById("adTable"), [
+      { label: "Ad", render: (row) => htmlEscape(row.adNo) },
+      { label: "Action", render: (row) => badge(row.action) },
+      { label: "Spend", num: true, render: (row) => formatMoney(row.spend) },
+      { label: "Clicks", num: true, render: (row) => formatNumber(row.linkClicks) },
+      { label: "CPC", num: true, render: (row) => formatMoney(row.cpcLink) },
+      { label: "Orders", num: true, render: (row) => formatNumber(row.orders) },
+      { label: "Comm", num: true, render: (row) => formatMoney(row.expectedCommission) },
+      { label: "ROAS", num: true, render: (row) => formatDecimal(row.commissionRoas) },
+      { label: "ROI", num: true, render: (row) => `<span class="${row.roi >= 0 ? "profit-text" : "loss-text"}">${formatPercent(row.roi)}</span>` },
+      { label: "Signal", render: (row) => `<div class="bar-cell">${bar(row.commissionRoas, maxAdRoas)}</div>` },
+      { label: "Note", render: (row) => htmlEscape(row.action.note) }
+    ], analysis.perAd, "Tiada data ad.");
+
+    const maxAttr = Math.max(...analysis.attribution.map((row) => row.expectedCommission), 1);
+    renderTable(document.getElementById("attributionTable"), [
+      { label: "Type", render: (row) => htmlEscape(row.key) },
+      { label: "Orders", num: true, render: (row) => formatNumber(row.orders) },
+      { label: "PV", num: true, render: (row) => formatMoney(row.purchaseValue) },
+      { label: "Comm", num: true, render: (row) => formatMoney(row.expectedCommission) },
+      { label: "Rate", num: true, render: (row) => formatPercent(row.avgCommissionRate) },
+      { label: "Bar", render: (row) => bar(row.expectedCommission, maxAttr) }
+    ], analysis.attribution, "Tiada data attribution.");
+
+    const maxCategory = Math.max(...analysis.categories.map((row) => row.expectedCommission), 1);
+    renderTable(document.getElementById("categoryTable"), [
+      { label: "Category", render: (row) => htmlEscape(row.key) },
+      { label: "Orders", num: true, render: (row) => formatNumber(row.orders) },
+      { label: "PV", num: true, render: (row) => formatMoney(row.purchaseValue) },
+      { label: "Comm", num: true, render: (row) => formatMoney(row.expectedCommission) },
+      { label: "Rate", num: true, render: (row) => formatPercent(row.avgCommissionRate) },
+      { label: "Bar", render: (row) => bar(row.expectedCommission, maxCategory) }
+    ], analysis.categories, "Tiada data category.");
+
+    renderTable(document.getElementById("audienceTable"), [
+      { label: "Age", render: (row) => htmlEscape(row.age) },
+      { label: "Gender", render: (row) => htmlEscape(row.gender) },
+      { label: "Spend", num: true, render: (row) => formatMoney(row.spend) },
+      { label: "Impr.", num: true, render: (row) => formatNumber(row.impressions) },
+      { label: "Clicks", num: true, render: (row) => formatNumber(row.linkClicks) },
+      { label: "CTR", num: true, render: (row) => formatPercent(row.ctr) },
+      { label: "CPC", num: true, render: (row) => formatMoney(row.cpc) }
+    ], analysis.audience, "Tiada data audience.");
+
+    renderIssues(analysis.issues);
+    renderSnapshots(analysis);
+    document.getElementById("saveSnapshotBtn").disabled = false;
+  }
+
+  function renderIssues(issues) {
+    const container = document.getElementById("issuesList");
+    if (!issues.length) {
+      container.innerHTML = `<p class="empty-state">Tiada isu tracking dikesan.</p>`;
+      return;
+    }
+    container.innerHTML = issues.map((issue) => (
+      `<div class="issue-item ${htmlEscape(issue.level)}"><strong>${htmlEscape(issue.title)}</strong><span>${htmlEscape(issue.detail)}</span></div>`
+    )).join("");
+  }
+
+  function loadSnapshots() {
+    try {
+      return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  function saveSnapshots(snapshots) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshots.slice(0, 30)));
+  }
+
+  function snapshotFromAnalysis(analysis, name) {
+    return {
+      id: `${Date.now()}`,
+      name: name || `Snapshot ${new Date().toLocaleString("ms-MY")}`,
+      createdAt: new Date().toISOString(),
+      summary: analysis.summary,
+      perAd: analysis.perAd.slice(0, 20).map((row) => ({
+        adNo: row.adNo,
+        spend: row.spend,
+        expectedCommission: row.expectedCommission,
+        commissionRoas: row.commissionRoas,
+        action: row.action.label
+      }))
+    };
+  }
+
+  function renderSnapshots(currentAnalysis) {
+    const snapshots = loadSnapshots();
+    const list = document.getElementById("snapshotList");
+    const compare = document.getElementById("snapshotCompare");
+    compare.innerHTML = `<option value="">Pilih snapshot untuk compare</option>${snapshots.map((snapshot) => (
+      `<option value="${htmlEscape(snapshot.id)}">${htmlEscape(snapshot.name)}</option>`
+    )).join("")}`;
+
+    if (!snapshots.length) {
+      list.innerHTML = `<p class="empty-state">Belum ada snapshot.</p>`;
+      document.getElementById("snapshotComparePanel").innerHTML = "";
+      return;
+    }
+
+    list.innerHTML = snapshots.map((snapshot) => (
+      `<div class="snapshot-item">
+        <div>
+          <strong>${htmlEscape(snapshot.name)}</strong>
+          <div class="snapshot-meta">${new Date(snapshot.createdAt).toLocaleString("ms-MY")} | Spend ${formatMoney(snapshot.summary.ads.spend)} | Comm ${formatMoney(snapshot.summary.commission.expectedCommission)}</div>
+        </div>
+        <button class="btn danger" type="button" data-delete-snapshot="${htmlEscape(snapshot.id)}">Delete</button>
+      </div>`
+    )).join("");
+
+    list.querySelectorAll("[data-delete-snapshot]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const next = loadSnapshots().filter((snapshot) => snapshot.id !== button.dataset.deleteSnapshot);
+        saveSnapshots(next);
+        renderSnapshots(currentAnalysis);
+      });
+    });
+  }
+
+  function renderCompare(currentAnalysis, snapshotId) {
+    const panel = document.getElementById("snapshotComparePanel");
+    if (!snapshotId || !currentAnalysis) {
+      panel.innerHTML = "";
+      return;
+    }
+    const snapshot = loadSnapshots().find((item) => item.id === snapshotId);
+    if (!snapshot) {
+      panel.innerHTML = "";
+      return;
+    }
+    const current = currentAnalysis.summary;
+    const previous = snapshot.summary;
+    const deltas = [
+      ["Spend", current.ads.spend - previous.ads.spend, "money"],
+      ["Expected Comm", current.commission.expectedCommission - previous.commission.expectedCommission, "money"],
+      ["Commission ROAS", current.commission.commissionRoas - previous.commission.commissionRoas, "decimal"],
+      ["ROI", current.commission.roi - previous.commission.roi, "percent"]
+    ];
+    panel.innerHTML = `<div class="compare-card"><strong>Compare vs ${htmlEscape(snapshot.name)}</strong>${
+      deltas.map(([label, delta, type]) => {
+        const text = type === "money" ? formatMoney(delta) : type === "percent" ? formatPercent(delta) : formatDecimal(delta);
+        const cls = delta >= 0 ? "profit-text" : "loss-text";
+        return `<div>${htmlEscape(label)}: <span class="${cls}">${text}</span></div>`;
+      }).join("")
+    }</div>`;
+  }
+
+  async function readFiles(files) {
+    const payloads = [];
+    for (const file of files) {
+      const text = await file.text();
+      payloads.push({ name: file.name, size: file.size, text });
+    }
+    return payloads;
+  }
+
+  function updateFileList(files) {
+    const list = document.getElementById("fileList");
+    if (!files.length) {
+      list.innerHTML = "";
+      return;
+    }
+    list.innerHTML = [...files].map((file) => `<span class="file-pill">${htmlEscape(file.name)}</span>`).join("");
+  }
+
+  function initDashboard() {
+    let currentAnalysis = null;
+    const fileInput = document.getElementById("fileInput");
+    const analyzeBtn = document.getElementById("analyzeBtn");
+    const saveBtn = document.getElementById("saveSnapshotBtn");
+    const clearBtn = document.getElementById("clearBtn");
+    const compareSelect = document.getElementById("snapshotCompare");
+
+    renderSnapshots(null);
+
+    fileInput.addEventListener("change", () => updateFileList(fileInput.files || []));
+
+    analyzeBtn.addEventListener("click", async () => {
+      const files = [...(fileInput.files || [])];
+      if (!files.length) {
+        document.getElementById("statusPanel").className = "status-panel watch";
+        document.getElementById("statusMessage").textContent = "Pilih sekurang-kurangnya satu CSV dahulu.";
+        return;
+      }
+      analyzeBtn.disabled = true;
+      analyzeBtn.textContent = "Menganalisis...";
+      try {
+        const payloads = await readFiles(files);
+        currentAnalysis = analyzeUploads(payloads);
+        renderAnalysis(currentAnalysis);
+      } catch (error) {
+        document.getElementById("statusPanel").className = "status-panel loss";
+        document.getElementById("statusMessage").textContent = `Gagal analisis: ${error.message}`;
+      } finally {
+        analyzeBtn.disabled = false;
+        analyzeBtn.textContent = "Analisis";
+      }
+    });
+
+    saveBtn.addEventListener("click", () => {
+      if (!currentAnalysis) return;
+      const name = document.getElementById("snapshotName").value.trim();
+      const snapshots = loadSnapshots();
+      snapshots.unshift(snapshotFromAnalysis(currentAnalysis, name));
+      saveSnapshots(snapshots);
+      document.getElementById("snapshotName").value = "";
+      renderSnapshots(currentAnalysis);
+    });
+
+    compareSelect.addEventListener("change", () => renderCompare(currentAnalysis, compareSelect.value));
+
+    clearBtn.addEventListener("click", () => {
+      currentAnalysis = null;
+      fileInput.value = "";
+      updateFileList([]);
+      document.getElementById("statusPanel").className = "status-panel muted";
+      document.getElementById("statusMessage").textContent = "Belum ada data dianalisis.";
+      document.getElementById("saveSnapshotBtn").disabled = true;
+      ["kpiSpend", "kpiTraffic", "kpiExpected", "kpiCompleted", "kpiRoas", "kpiRoi", "kpiBeRoas", "kpiRate"].forEach((id) => {
+        document.getElementById(id).textContent = "-";
+      });
+      document.getElementById("summaryLine").textContent = "Upload CSV untuk mula.";
+      document.getElementById("summaryGrid").innerHTML = "";
+      document.getElementById("adTable").innerHTML = "";
+      document.getElementById("attributionTable").innerHTML = "";
+      document.getElementById("categoryTable").innerHTML = "";
+      document.getElementById("audienceTable").innerHTML = "";
+      document.getElementById("issuesList").innerHTML = "";
+      renderSnapshots(null);
+    });
+
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+    }
+  }
+
+  const core = {
+    CORE_VERSION,
+    parseCsv,
+    detectFile,
+    analyzeUploads,
+    parseNumber,
+    normalizeSubId4,
+    normalizeAdNo
+  };
+
+  if (typeof window !== "undefined") {
+    window.ShopeeDashboardCore = core;
+  }
+
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = core;
+  }
+
+  if (typeof document !== "undefined") {
+    document.addEventListener("DOMContentLoaded", initDashboard);
+  }
+}());

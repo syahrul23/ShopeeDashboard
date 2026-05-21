@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" role="img" aria-labelledby="title">
+  <title id="title">Shopee Affiliate Dashboard</title>
+  <rect width="192" height="192" rx="32" fill="#0f766e"/>
+  <path d="M48 132h96v18H48zM48 96h72v18H48zM48 60h46v18H48z" fill="#ffffff"/>
+  <circle cx="140" cy="72" r="18" fill="#f59e0b"/>
+  <path d="M128 126c20-10 32-28 34-54" fill="none" stroke="#ffffff" stroke-width="10" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ms">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0f766e">
+    <title>Shopee Affiliate Dashboard</title>
+    <link rel="icon" href="./icon.svg" type="image/svg+xml">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">Shopee Affiliate Cookies</p>
+        <h1>Performance Dashboard</h1>
+      </div>
+      <div class="header-actions">
+        <button id="saveSnapshotBtn" class="btn secondary" type="button" disabled>Simpan Snapshot</button>
+        <button id="clearBtn" class="btn ghost" type="button">Reset</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="upload-band" aria-labelledby="upload-title">
+        <div class="upload-copy">
+          <h2 id="upload-title">Upload CSV</h2>
+          <p>Ads report + Affiliate Commission report. Multi-file upload disokong.</p>
+        </div>
+        <div class="upload-controls">
+          <label class="file-picker" for="fileInput">
+            <span>Pilih CSV</span>
+            <input id="fileInput" type="file" accept=".csv,text/csv" multiple>
+          </label>
+          <button id="analyzeBtn" class="btn primary" type="button">Analisis</button>
+        </div>
+        <div id="fileList" class="file-list" aria-live="polite"></div>
+      </section>
+
+      <section id="statusPanel" class="status-panel muted">
+        <strong>Status</strong>
+        <span id="statusMessage">Belum ada data dianalisis.</span>
+      </section>
+
+      <section class="kpi-grid" aria-label="KPI utama">
+        <article class="kpi-card">
+          <span>Spend Ads</span>
+          <strong id="kpiSpend">-</strong>
+          <small id="kpiTraffic">-</small>
+        </article>
+        <article class="kpi-card">
+          <span>Expected Commission</span>
+          <strong id="kpiExpected">-</strong>
+          <small id="kpiCompleted">-</small>
+        </article>
+        <article class="kpi-card">
+          <span>Commission ROAS</span>
+          <strong id="kpiRoas">-</strong>
+          <small id="kpiRoi">-</small>
+        </article>
+        <article class="kpi-card">
+          <span>Break-even GMV ROAS</span>
+          <strong id="kpiBeRoas">-</strong>
+          <small id="kpiRate">-</small>
+        </article>
+      </section>
+
+      <section class="content-section" aria-labelledby="summary-title">
+        <div class="section-heading">
+          <h2 id="summary-title">Executive Summary</h2>
+          <p id="summaryLine">Upload CSV untuk mula.</p>
+        </div>
+        <div id="summaryGrid" class="metric-grid"></div>
+      </section>
+
+      <section class="content-section" aria-labelledby="ad-title">
+        <div class="section-heading">
+          <h2 id="ad-title">Ad / Sub_id4 Ranking</h2>
+          <p id="adSubtitle">Ranking ikut Commission ROAS dan komisyen.</p>
+        </div>
+        <div id="adTable" class="table-wrap"></div>
+      </section>
+
+      <section class="split-section">
+        <section class="content-section" aria-labelledby="attrib-title">
+          <div class="section-heading">
+            <h2 id="attrib-title">Attribution</h2>
+          </div>
+          <div id="attributionTable" class="table-wrap"></div>
+        </section>
+        <section class="content-section" aria-labelledby="category-title">
+          <div class="section-heading">
+            <h2 id="category-title">Category</h2>
+          </div>
+          <div id="categoryTable" class="table-wrap"></div>
+        </section>
+      </section>
+
+      <section class="content-section" aria-labelledby="audience-title">
+        <div class="section-heading">
+          <h2 id="audience-title">Audience</h2>
+          <p>Age/gender dari Ads report.</p>
+        </div>
+        <div id="audienceTable" class="table-wrap"></div>
+      </section>
+
+      <section class="content-section" aria-labelledby="issues-title">
+        <div class="section-heading">
+          <h2 id="issues-title">Tracking Issues</h2>
+        </div>
+        <div id="issuesList" class="issues-list"></div>
+      </section>
+
+      <section class="content-section" aria-labelledby="snapshot-title">
+        <div class="section-heading">
+          <h2 id="snapshot-title">Snapshot History</h2>
+          <p>History disimpan di browser device ini.</p>
+        </div>
+        <div class="snapshot-toolbar">
+          <input id="snapshotName" class="text-input" type="text" placeholder="Nama snapshot">
+          <select id="snapshotCompare" class="text-input" aria-label="Compare snapshot"></select>
+        </div>
+        <div id="snapshotComparePanel" class="compare-panel"></div>
+        <div id="snapshotList" class="snapshot-list"></div>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
