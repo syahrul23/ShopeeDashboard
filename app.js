@@ -10,9 +10,9 @@
   const VIDEO_SIZE_WARNING_BYTES = 100 * 1024 * 1024;
   const VIDEO_DURATION_WARNING_SECONDS = 180;
   const QUALITY_PRESETS = {
-    balanced: { label: "Balanced", crf: "23" },
-    small: { label: "Smaller file", crf: "28" },
-    high: { label: "Higher quality", crf: "20" }
+    balanced: { label: "Balanced Fast", crf: "24", encoderPreset: "superfast", note: "Laju dengan quality masih okay" },
+    small: { label: "Max Speed", crf: "28", encoderPreset: "ultrafast", note: "Paling laju, file boleh besar/quality turun" },
+    high: { label: "Better Quality", crf: "22", encoderPreset: "veryfast", note: "Lebih cantik, lebih lambat" }
   };
   const videoState = {
     file: null,
@@ -1535,13 +1535,20 @@
     const target = Number.parseInt(targetHeight, 10) || 720;
     const orientation = videoOrientation(videoState.metadata.width, videoState.metadata.height);
     const longSide = Math.round(target * 16 / 9);
+    const currentWidth = videoState.metadata.width || 0;
+    const currentHeight = videoState.metadata.height || 0;
+    const fpsCap = "fps=30";
+
     if (orientation === "vertical") {
-      return `scale=${target}:${longSide}:force_original_aspect_ratio=increase:flags=lanczos,crop=${target}:${longSide},setsar=1`;
+      if (currentWidth === target && currentHeight === longSide) return `${fpsCap},setsar=1`;
+      return `${fpsCap},scale=${target}:${longSide}:force_original_aspect_ratio=increase:flags=lanczos,crop=${target}:${longSide},setsar=1`;
     }
     if (orientation === "landscape") {
-      return `scale=${longSide}:${target}:force_original_aspect_ratio=increase:flags=lanczos,crop=${longSide}:${target},setsar=1`;
+      if (currentWidth === longSide && currentHeight === target) return `${fpsCap},setsar=1`;
+      return `${fpsCap},scale=${longSide}:${target}:force_original_aspect_ratio=increase:flags=lanczos,crop=${longSide}:${target},setsar=1`;
     }
-    return `scale=${target}:${target}:flags=lanczos,setsar=1`;
+    if (currentWidth === target && currentHeight === target) return `${fpsCap},setsar=1`;
+    return `${fpsCap},scale=${target}:${target}:flags=lanczos,setsar=1`;
   }
 
   function shopeeSafeCheck(width, height, targetHeight) {
@@ -1668,7 +1675,7 @@
       ["Output", "MP4", `${targetHeight}p`],
       ["Resolution", width && height ? `${width} x ${height}` : "-", safe.orientation],
       ["Shopee Safe Check", safe.label, safe.note],
-      ["Quality", QUALITY_PRESETS[preset].label, `CRF ${QUALITY_PRESETS[preset].crf}`],
+      ["Speed Mode", QUALITY_PRESETS[preset].label, `${QUALITY_PRESETS[preset].encoderPreset} | CRF ${QUALITY_PRESETS[preset].crf}`],
       ["Output Size", formatBytes(videoState.outputSize), "Siap untuk download"]
     ];
     summary.innerHTML = stats.map(([label, value, note]) => (
@@ -1750,6 +1757,7 @@
 
   async function convertVideo() {
     if (!videoState.file || videoState.converting) return;
+    const startedAt = performance.now();
     const targetHeight = currentTargetHeight();
     const preset = currentQualityPreset();
     const quality = QUALITY_PRESETS[preset];
@@ -1775,8 +1783,9 @@
         "-map", "0:v:0",
         "-map", "0:a?",
         "-vf", videoFilter,
+        "-threads", "0",
         "-c:v", "libx264",
-        "-preset", "veryfast",
+        "-preset", quality.encoderPreset,
         "-crf", quality.crf,
         "-pix_fmt", "yuv420p",
         "-c:a", "aac",
@@ -1800,6 +1809,7 @@
       link.classList.remove("disabled");
       link.setAttribute("aria-disabled", "false");
       updateOutputSummary(targetHeight, preset, outputMetadata);
+      appendVideoLog(`Conversion time: ${formatVideoDuration((performance.now() - startedAt) / 1000)}`);
       setVideoProgress(1, "Conversion siap. Download MP4 tersedia.");
       setVideoStatus(safe.pass ? "profit" : "watch", safe.pass ? "Conversion siap dan resolution Shopee-safe." : "Conversion siap, tapi resolution masih perlu disemak.");
     } catch (error) {

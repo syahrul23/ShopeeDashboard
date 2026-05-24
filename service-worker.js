@@ -1,4 +1,4 @@
-const CACHE_NAME = "shopee-dashboard-v7";
+const CACHE_NAME = "shopee-dashboard-v8";
 const APP_SHELL = [
   "./",
   "./index.html",
