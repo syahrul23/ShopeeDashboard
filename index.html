@@ -4,30 +4,39 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#0f766e">
-    <meta name="app-build" content="mobile-friendly-v13">
+    <meta name="app-build" content="trend-charts-v14">
     <title>Shopee Affiliate Dashboard</title>
     <link rel="icon" href="./icon.svg" type="image/svg+xml">
     <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="stylesheet" href="./styles.css?v=mobile-friendly-v13">
+    <link rel="stylesheet" href="./styles.css?v=trend-charts-v14">
   </head>
-  <body data-page="performance" data-app-build="mobile-friendly-v13">
+  <body data-page="overview" data-app-build="trend-charts-v14">
     <div class="app-shell">
+      <button id="sidebarBackdrop" class="sidebar-backdrop" type="button" aria-label="Tutup sidebar" hidden></button>
       <aside class="app-sidebar" aria-label="Dashboard navigation">
-        <div class="sidebar-brand">
-          <span>Shopee Tools</span>
-          <strong>Affiliate Ops</strong>
+        <div class="sidebar-top">
+          <div class="sidebar-brand">
+            <span>Shopee Tools</span>
+            <strong>Affiliate Ops</strong>
+          </div>
+          <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-label="Hide sidebar" aria-expanded="true">Menu</button>
         </div>
         <nav class="sidebar-nav">
-          <button class="nav-btn active" type="button" data-page-target="performance">Performance</button>
+          <button class="nav-btn active" type="button" data-page-target="overview">Overview</button>
+          <button class="nav-btn" type="button" data-page-target="trend">Trend</button>
+          <button class="nav-btn" type="button" data-page-target="campaign">Campaign & Ad Set</button>
+          <button class="nav-btn" type="button" data-page-target="creative">Creative Video</button>
+          <button class="nav-btn" type="button" data-page-target="health">Data Health</button>
           <button class="nav-btn" type="button" data-page-target="video">Video Converter</button>
         </nav>
       </aside>
 
       <div class="app-frame">
         <header class="app-header">
-          <div>
+          <button id="sidebarOpenBtn" class="btn ghost sidebar-open" type="button">Menu</button>
+          <div class="header-copy">
             <p id="pageEyebrow" class="eyebrow">Shopee Affiliate Cookies</p>
-            <h1 id="appTitle">Performance Dashboard</h1>
+            <h1 id="appTitle">Overview Dashboard</h1>
           </div>
           <div id="performanceActions" class="header-actions">
             <button id="saveSnapshotBtn" class="btn secondary" type="button" disabled>Simpan Snapshot</button>
@@ -36,7 +45,7 @@
         </header>
 
         <main>
-          <section id="performancePage" class="page-view active" aria-label="Performance dashboard">
+          <section id="overviewPage" class="page-view active" aria-label="Overview dashboard">
             <section class="upload-band" aria-labelledby="upload-title">
               <div class="upload-copy">
                 <h2 id="upload-title">Upload CSV</h2>
@@ -152,6 +161,144 @@
             </section>
           </section>
 
+          <section id="trendPage" class="page-view" aria-labelledby="trend-title" hidden>
+            <section class="content-section">
+              <div class="section-heading">
+                <div>
+                  <h2 id="trend-title">Performance Trend</h2>
+                  <p>Trend Ads ikut Reporting starts, commission ikut Order Time.</p>
+                </div>
+                <div class="segmented-control chart-mode-control" role="radiogroup" aria-label="Trend period">
+                  <label>
+                    <input type="radio" name="trendMode" value="daily" checked>
+                    <span>Daily</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="trendMode" value="weekly">
+                    <span>Weekly</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="trendMode" value="monthly">
+                    <span>Monthly</span>
+                  </label>
+                </div>
+              </div>
+              <div id="trendStatus" class="status-panel muted">
+                <strong>Status</strong>
+                <span>Upload dan analisis CSV untuk lihat trend.</span>
+              </div>
+            </section>
+            <section class="split-section chart-split">
+              <section class="content-section">
+                <div class="section-heading">
+                  <h2>Profit Trend</h2>
+                </div>
+                <div id="moneyTrendChart" class="chart-card"></div>
+              </section>
+              <section class="content-section">
+                <div class="section-heading">
+                  <h2>Traffic Trend</h2>
+                </div>
+                <div id="trafficTrendChart" class="chart-card"></div>
+              </section>
+            </section>
+            <section class="split-section chart-split">
+              <section class="content-section">
+                <div class="section-heading">
+                  <h2>ROAS Trend</h2>
+                </div>
+                <div id="roasTrendChart" class="chart-card"></div>
+              </section>
+              <section class="content-section">
+                <div class="section-heading">
+                  <h2>EPC vs CPC</h2>
+                </div>
+                <div id="clickValueTrendChart" class="chart-card"></div>
+              </section>
+            </section>
+            <section class="content-section">
+              <div class="section-heading">
+                <h2>Trend Detail</h2>
+              </div>
+              <div id="trendTable" class="table-wrap"></div>
+            </section>
+          </section>
+
+          <section id="campaignPage" class="page-view" aria-labelledby="campaign-title" hidden>
+            <section class="content-section">
+              <div class="section-heading">
+                <div>
+                  <h2 id="campaign-title">Campaign & Ad Set</h2>
+                  <p>Commission dipecah ikut campaign/adset hanya bila Sub_id4 cukup unik.</p>
+                </div>
+              </div>
+              <div id="campaignNote" class="status-panel muted">
+                <strong>Status</strong>
+                <span>Upload CSV untuk lihat campaign dan ad set.</span>
+              </div>
+            </section>
+            <section class="content-section">
+              <div class="section-heading">
+                <h2>Campaign Performance</h2>
+              </div>
+              <div id="campaignTable" class="table-wrap"></div>
+            </section>
+            <section class="content-section">
+              <div class="section-heading">
+                <h2>Ad Set Performance</h2>
+              </div>
+              <div id="adSetTable" class="table-wrap"></div>
+            </section>
+            <section class="content-section">
+              <div class="section-heading">
+                <h2>Ad ID Performance</h2>
+              </div>
+              <div id="adIdTable" class="table-wrap"></div>
+            </section>
+          </section>
+
+          <section id="creativePage" class="page-view" aria-labelledby="creative-title" hidden>
+            <section class="content-section">
+              <div class="section-heading">
+                <div>
+                  <h2 id="creative-title">Creative Video</h2>
+                  <p>Baca hook, completion, click quality, dan cost view.</p>
+                </div>
+              </div>
+              <div id="creativeSummary" class="metric-grid"></div>
+            </section>
+            <section class="content-section">
+              <div class="section-heading">
+                <h2>Video Creative Ranking</h2>
+              </div>
+              <div id="creativeTable" class="table-wrap"></div>
+            </section>
+          </section>
+
+          <section id="healthPage" class="page-view" aria-labelledby="health-title" hidden>
+            <section class="content-section">
+              <div class="section-heading">
+                <div>
+                  <h2 id="health-title">Data Health</h2>
+                  <p>Semakan keselamatan data sebelum buat keputusan.</p>
+                </div>
+              </div>
+              <div id="dataHealthGrid" class="metric-grid"></div>
+            </section>
+            <section class="content-section">
+              <div class="section-heading">
+                <h2>Reconciliation</h2>
+              </div>
+              <div id="dataHealthTable" class="table-wrap"></div>
+            </section>
+            <section class="content-section">
+              <div class="section-heading">
+                <h2>Tracking Issues</h2>
+              </div>
+              <div id="dataHealthIssues" class="issues-list"></div>
+            </section>
+          </section>
+
           <section id="videoPage" class="page-view" aria-labelledby="video-title" hidden>
             <section class="content-section video-intro">
               <div class="section-heading">
@@ -254,6 +401,6 @@
       </div>
     </div>
 
-    <script src="./app.js?v=mobile-friendly-v13" data-app-build="mobile-friendly-v13"></script>
+    <script src="./app.js?v=trend-charts-v14" data-app-build="trend-charts-v14"></script>
   </body>
 </html>

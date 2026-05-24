@@ -3,7 +3,7 @@
 
   const STORAGE_KEY = "shopeeDashboardSnapshots:v1";
   const CORE_VERSION = "1.0.0";
-  const APP_BUILD_VERSION = "mobile-friendly-v13";
+  const APP_BUILD_VERSION = "trend-charts-v14";
   const SCRIPT_BUILD_VERSION = typeof document !== "undefined" && document.currentScript ? document.currentScript.dataset.appBuild || "" : "";
   const FFMPEG_VERSION = "0.12.15";
   const FFMPEG_CORE_VERSION = "0.12.10";
@@ -433,53 +433,268 @@
     };
   }
 
-  function computeAnalysis(adsRows, commissionRows, meta) {
-    const adsByAd = new Map();
-    const missingClicksAllFiles = meta.missingClicksAllFiles || [];
-    const missingOutboundFiles = meta.missingOutboundFiles || [];
-    const clicksAllAvailable = adsRows.length > 0 && !missingClicksAllFiles.length;
-    const outboundAvailable = adsRows.length > 0 && !missingOutboundFiles.length;
-    const adsTotals = {
+  function isBlank(value) {
+    return String(value == null ? "" : value).trim() === "";
+  }
+
+  function isZeroId(value) {
+    const raw = String(value == null ? "" : value).trim();
+    return !raw || raw === "0" || raw === "0.0";
+  }
+
+  function rawDigits(value) {
+    const raw = String(value == null ? "" : value).trim();
+    if (!raw) return "";
+    const clean = raw.endsWith(".0") ? raw.slice(0, -2) : raw;
+    return /^\d+$/.test(clean) ? clean : "";
+  }
+
+  function isMetaSummaryRow(row, headers) {
+    if (!hasColumns(headers || [], ["Campaign ID", "Ad set ID", "Ad ID"])) return false;
+    const idsAreZero = ["Campaign ID", "Ad set ID", "Ad ID"].every((field) => isZeroId(getField(row, field)));
+    const namesAreBlank = ["Ad name", "Campaign name", "Ad set name"].every((field) => isBlank(getField(row, field)));
+    const hasTotalMetric = ["Amount spent (MYR)", "Impressions", "Reach", "Clicks (all)"]
+      .some((field) => parseNumber(getField(row, field)) > 0);
+    return idsAreZero && namesAreBlank && hasTotalMetric;
+  }
+
+  function emptyAdsStats() {
+    return {
       spend: 0,
       impressions: 0,
       reach: 0,
       linkClicks: 0,
       clicksAll: 0,
-      outboundClicks: 0
+      outboundClicks: 0,
+      video25: 0,
+      video50: 0,
+      video75: 0,
+      video95: 0,
+      video100: 0,
+      videoAverageTimeWeighted: 0,
+      videoAverageTimeImpressions: 0,
+      threeSecondRateWeighted: 0,
+      threeSecondRateImpressions: 0,
+      thruPlayCostWeighted: 0,
+      thruPlayCostPlays: 0,
+      rows: 0
     };
+  }
+
+  function addAdsStats(target, row) {
+    const impressions = parseNumber(getField(row, "Impressions"));
+    const video25 = parseNumber(getField(row, "Video plays at 25%"));
+    const video100 = parseNumber(getField(row, "Video plays at 100%"));
+    const avgTime = parseNumber(getField(row, "Video average play time"));
+    const threeSecondRate = parseNumber(getField(row, "3-second video plays rate per impressions"));
+    const thruPlayCost = parseNumber(getField(row, "Cost per ThruPlay (MYR)"));
+    target.spend += parseNumber(getField(row, "Amount spent (MYR)"));
+    target.impressions += impressions;
+    target.reach += parseNumber(getField(row, "Reach"));
+    target.linkClicks += parseNumber(getField(row, "Link clicks"));
+    target.clicksAll += parseNumber(getField(row, "Clicks (all)"));
+    target.outboundClicks += parseNumber(getField(row, "Outbound clicks"));
+    target.video25 += video25;
+    target.video50 += parseNumber(getField(row, "Video plays at 50%"));
+    target.video75 += parseNumber(getField(row, "Video plays at 75%"));
+    target.video95 += parseNumber(getField(row, "Video plays at 95%"));
+    target.video100 += video100;
+    target.videoAverageTimeWeighted += avgTime * impressions;
+    target.videoAverageTimeImpressions += impressions;
+    target.threeSecondRateWeighted += threeSecondRate * impressions;
+    target.threeSecondRateImpressions += impressions;
+    target.thruPlayCostWeighted += thruPlayCost * video100;
+    target.thruPlayCostPlays += video100;
+    target.rows += 1;
+  }
+
+  function adsMetrics(stats, flags) {
+    const outboundAvailable = flags && flags.outboundAvailable;
+    const clicksAllAvailable = flags && flags.clicksAllAvailable;
+    const trafficClicks = outboundAvailable ? stats.outboundClicks : stats.linkClicks;
+    return {
+      ...stats,
+      clicksAllAvailable,
+      outboundAvailable,
+      ctrLink: safeDivide(stats.linkClicks, stats.impressions),
+      linkClickRate: clicksAllAvailable ? safeDivide(stats.linkClicks, stats.clicksAll) : 0,
+      cpcLink: safeDivide(stats.spend, stats.linkClicks),
+      outboundCtr: outboundAvailable ? safeDivide(stats.outboundClicks, stats.impressions) : 0,
+      outboundCpc: outboundAvailable ? safeDivide(stats.spend, stats.outboundClicks) : 0,
+      linkOutboundGap: outboundAvailable ? stats.linkClicks - stats.outboundClicks : 0,
+      trafficClicks,
+      trafficCtr: outboundAvailable ? safeDivide(stats.outboundClicks, stats.impressions) : safeDivide(stats.linkClicks, stats.impressions),
+      trafficCpc: safeDivide(stats.spend, trafficClicks),
+      trafficSource: outboundAvailable ? "outbound" : "link",
+      cpm: safeDivide(stats.spend, stats.impressions) * 1000,
+      frequency: safeDivide(stats.impressions, stats.reach),
+      videoAvgTime: safeDivide(stats.videoAverageTimeWeighted, stats.videoAverageTimeImpressions),
+      threeSecondRate: safeDivide(stats.threeSecondRateWeighted, stats.threeSecondRateImpressions) / 100,
+      videoCompletionRate: safeDivide(stats.video100, stats.video25),
+      videoClickRate: safeDivide(trafficClicks, stats.video25),
+      costPerCompletedView: safeDivide(stats.spend, stats.video100),
+      costPerThruPlay: safeDivide(stats.thruPlayCostWeighted, stats.thruPlayCostPlays)
+    };
+  }
+
+  function adsIdentity(row) {
+    const adNo = normalizeAdNo(getField(row, "Ad name")) || "Unknown";
+    const adId = rawDigits(getField(row, "Ad ID"));
+    const adSetId = rawDigits(getField(row, "Ad set ID"));
+    const campaignId = rawDigits(getField(row, "Campaign ID"));
+    return {
+      adNo,
+      adId,
+      adName: String(getField(row, "Ad name") || adNo).trim() || adNo,
+      adSetId,
+      adSetName: String(getField(row, "Ad set name") || "Unknown Ad Set").trim() || "Unknown Ad Set",
+      campaignId,
+      campaignName: String(getField(row, "Campaign name") || "Unknown Campaign").trim() || "Unknown Campaign"
+    };
+  }
+
+  function dateKeyFromDate(date) {
+    if (!date || !Number.isFinite(date.getTime())) return "";
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  function adsDateKey(row) {
+    const raw = String(getField(row, "Reporting starts") || "").trim();
+    return raw.match(/^\d{4}-\d{2}-\d{2}/) ? raw.slice(0, 10) : "";
+  }
+
+  function orderDateKey(row) {
+    return dateKeyFromDate(parseDateTime(getField(row, "Order Time")));
+  }
+
+  function periodKey(dateKey, mode) {
+    if (!dateKey) return "";
+    const [year, month, day] = dateKey.split("-").map((part) => Number.parseInt(part, 10));
+    if (!year || !month || !day) return "";
+    if (mode === "monthly") return `${year}-${String(month).padStart(2, "0")}`;
+    if (mode === "weekly") {
+      const date = new Date(year, month - 1, day);
+      const dayOfWeek = date.getDay() || 7;
+      const start = new Date(date);
+      start.setDate(date.getDate() - dayOfWeek + 1);
+      const end = new Date(start);
+      end.setDate(start.getDate() + 6);
+      return `${dateKeyFromDate(start)} - ${dateKeyFromDate(end)}`;
+    }
+    return dateKey;
+  }
+
+  function sortPeriodKey(key) {
+    return String(key || "").slice(0, 10);
+  }
+
+  function dateRangeText(keys) {
+    const clean = [...new Set((keys || []).filter(Boolean))].sort();
+    if (!clean.length) return "-";
+    return clean.length === 1 ? clean[0] : `${clean[0]} sampai ${clean[clean.length - 1]}`;
+  }
+
+  function groupAdsRows(rows, keyFn, labelFn, flags) {
+    const map = new Map();
+    rows.forEach((row) => {
+      const key = keyFn(row);
+      if (!key) return;
+      const current = map.get(key) || { key, label: labelFn(row), stats: emptyAdsStats() };
+      addAdsStats(current.stats, row);
+      map.set(key, current);
+    });
+    return [...map.values()].map((item) => ({ key: item.key, label: item.label, ...adsMetrics(item.stats, flags) }));
+  }
+
+  function addDimensionCommission(row, target) {
+    addCommissionGroup(target, row, statusType(row));
+  }
+
+  function dimensionAction(row, totalSpend) {
+    return actionForAd(row, totalSpend);
+  }
+
+  function serializeDimensionRows(rows, commissionMaps, totalSpend) {
+    return rows.map((row) => {
+      const group = commissionMaps.get(row.key) || groupInit();
+      const trafficClicks = row.trafficClicks;
+      const result = {
+        ...row,
+        orders: group.orders.size,
+        items: group.items,
+        purchaseValue: group.purchaseValue,
+        expectedCommission: group.expectedCommission,
+        completedCommission: group.completedCommission,
+        pendingCommission: group.pendingCommission,
+        avgCommissionRate: safeDivide(group.expectedCommission, group.purchaseValue),
+        commissionRoas: safeDivide(group.expectedCommission, row.spend),
+        gmvRoas: safeDivide(group.purchaseValue, row.spend),
+        roi: safeDivide(group.expectedCommission - row.spend, row.spend),
+        epc: safeDivide(group.expectedCommission, trafficClicks),
+        cpa: safeDivide(row.spend, group.orders.size),
+        orderCvr: safeDivide(group.orders.size, trafficClicks)
+      };
+      result.action = dimensionAction(result, totalSpend);
+      return result;
+    }).sort((a, b) => b.spend - a.spend);
+  }
+
+  function computeAnalysis(adsRows, commissionRows, meta) {
+    const adsByAd = new Map();
+    const adIdToAdNo = new Map();
+    const adIdToKeys = new Map();
+    const adNoToCampaignKeys = new Map();
+    const adNoToAdSetKeys = new Map();
+    const adNoToAdKeys = new Map();
+    const missingClicksAllFiles = meta.missingClicksAllFiles || [];
+    const missingOutboundFiles = meta.missingOutboundFiles || [];
+    const clicksAllAvailable = adsRows.length > 0 && !missingClicksAllFiles.length;
+    const outboundAvailable = adsRows.length > 0 && !missingOutboundFiles.length;
+    const flags = { clicksAllAvailable, outboundAvailable };
+    const adsTotalStats = emptyAdsStats();
+
+    function rememberAdSet(map, adNo, value) {
+      if (!adNo || !value) return;
+      if (!map.has(adNo)) map.set(adNo, new Set());
+      map.get(adNo).add(value);
+    }
 
     adsRows.forEach((row) => {
-      const adNo = normalizeAdNo(getField(row, "Ad name")) || "Unknown";
-      const current = adsByAd.get(adNo) || {
-        adNo,
-        spend: 0,
-        impressions: 0,
-        reach: 0,
-        linkClicks: 0,
-        clicksAll: 0,
-        outboundClicks: 0
-      };
-      current.spend += parseNumber(getField(row, "Amount spent (MYR)"));
-      current.impressions += parseNumber(getField(row, "Impressions"));
-      current.reach += parseNumber(getField(row, "Reach"));
-      current.linkClicks += parseNumber(getField(row, "Link clicks"));
-      current.clicksAll += parseNumber(getField(row, "Clicks (all)"));
-      current.outboundClicks += parseNumber(getField(row, "Outbound clicks"));
-      adsByAd.set(adNo, current);
+      const identity = adsIdentity(row);
+      const campaignKey = identity.campaignId || identity.campaignName;
+      const adSetKey = identity.adSetId || identity.adSetName;
+      const adKey = identity.adId || identity.adNo;
+      const current = adsByAd.get(identity.adNo) || { adNo: identity.adNo, stats: emptyAdsStats() };
+      addAdsStats(current.stats, row);
+      adsByAd.set(identity.adNo, current);
+      addAdsStats(adsTotalStats, row);
+      rememberAdSet(adNoToCampaignKeys, identity.adNo, campaignKey);
+      rememberAdSet(adNoToAdSetKeys, identity.adNo, adSetKey);
+      rememberAdSet(adNoToAdKeys, identity.adNo, adKey);
+      if (identity.adId) {
+        adIdToAdNo.set(identity.adId, identity.adNo);
+        adIdToKeys.set(identity.adId, { campaignKey, adSetKey, adKey });
+      }
     });
 
-    adsByAd.forEach((row) => {
-      adsTotals.spend += row.spend;
-      adsTotals.impressions += row.impressions;
-      adsTotals.reach += row.reach;
-      adsTotals.linkClicks += row.linkClicks;
-      adsTotals.clicksAll += row.clicksAll;
-      adsTotals.outboundClicks += row.outboundClicks;
-    });
+    const adsTotals = adsMetrics(adsTotalStats, flags);
 
     const expectedRows = [];
     const cancelledRows = [];
     const unmappedRows = [];
+
+    function resolveCommissionAd(row) {
+      const raw = rawDigits(getField(row, "Sub_id4"));
+      if (raw && adIdToAdNo.has(raw)) {
+        return { adNo: adIdToAdNo.get(raw), adId: raw, source: "adId" };
+      }
+      const adNo = normalizeSubId4(getField(row, "Sub_id4"));
+      if (adNo) return { adNo, adId: "", source: "adNo" };
+      return { adNo: "", adId: "", source: "unmapped" };
+    }
 
     commissionRows.forEach((row) => {
       const status = statusType(row);
@@ -489,7 +704,7 @@
       }
       expectedRows.push(row);
       const subid = String(getField(row, "Sub_id4") || "").trim();
-      if (subid && !normalizeSubId4(subid)) unmappedRows.push(row);
+      if (subid && !resolveCommissionAd(row).adNo) unmappedRows.push(row);
     });
 
     const totalsGroup = groupInit();
@@ -502,23 +717,90 @@
 
     const commissionByAd = groupBy(
       expectedRows,
-      (row) => normalizeSubId4(getField(row, "Sub_id4")),
+      (row) => resolveCommissionAd(row).adNo,
       (group, row) => addCommissionGroup(group, row, statusType(row))
     );
 
+    const campaignAds = groupAdsRows(
+      adsRows,
+      (row) => {
+        const identity = adsIdentity(row);
+        return identity.campaignId || identity.campaignName;
+      },
+      (row) => {
+        const identity = adsIdentity(row);
+        return identity.campaignName;
+      },
+      flags
+    );
+    const adSetAds = groupAdsRows(
+      adsRows,
+      (row) => {
+        const identity = adsIdentity(row);
+        return identity.adSetId || identity.adSetName;
+      },
+      (row) => {
+        const identity = adsIdentity(row);
+        return identity.adSetName;
+      },
+      flags
+    );
+    const adIdAds = groupAdsRows(
+      adsRows,
+      (row) => {
+        const identity = adsIdentity(row);
+        return identity.adId || identity.adNo;
+      },
+      (row) => {
+        const identity = adsIdentity(row);
+        return `${identity.adName}${identity.adId ? ` (${identity.adId})` : ""}`;
+      },
+      flags
+    );
+
+    const campaignCommission = new Map();
+    const adSetCommission = new Map();
+    const adIdCommission = new Map();
+    const ambiguousDimensionRows = [];
+
+    function addToCommissionMap(map, key, row) {
+      if (!key) return false;
+      if (!map.has(key)) map.set(key, groupInit());
+      addDimensionCommission(row, map.get(key));
+      return true;
+    }
+
+    function uniqueSetValue(map, adNo) {
+      const set = map.get(adNo);
+      return set && set.size === 1 ? [...set][0] : "";
+    }
+
+    expectedRows.forEach((row) => {
+      const resolved = resolveCommissionAd(row);
+      if (!resolved.adNo) return;
+      if (resolved.source === "adId") {
+        const keys = adIdToKeys.get(resolved.adId);
+        if (keys) {
+          addToCommissionMap(campaignCommission, keys.campaignKey, row);
+          addToCommissionMap(adSetCommission, keys.adSetKey, row);
+          addToCommissionMap(adIdCommission, keys.adKey, row);
+        }
+        return;
+      }
+      const campaignKey = uniqueSetValue(adNoToCampaignKeys, resolved.adNo);
+      const adSetKey = uniqueSetValue(adNoToAdSetKeys, resolved.adNo);
+      const adKey = uniqueSetValue(adNoToAdKeys, resolved.adNo);
+      const campaignAdded = addToCommissionMap(campaignCommission, campaignKey, row);
+      const adSetAdded = addToCommissionMap(adSetCommission, adSetKey, row);
+      const adAdded = addToCommissionMap(adIdCommission, adKey, row);
+      if (!campaignAdded || !adSetAdded || !adAdded) ambiguousDimensionRows.push(row);
+    });
+
     const adKeys = new Set([...adsByAd.keys(), ...commissionByAd.keys()]);
     const perAd = [...adKeys].map((adNo) => {
-      const ads = adsByAd.get(adNo) || {
-        adNo,
-        spend: 0,
-        impressions: 0,
-        reach: 0,
-        linkClicks: 0,
-        clicksAll: 0,
-        outboundClicks: 0
-      };
+      const ads = adsByAd.get(adNo) ? adsMetrics(adsByAd.get(adNo).stats, flags) : adsMetrics(emptyAdsStats(), flags);
       const group = commissionByAd.get(adNo) || groupInit();
-      const trafficClicks = outboundAvailable ? ads.outboundClicks : ads.linkClicks;
+      const trafficClicks = ads.trafficClicks;
       const row = {
         adNo,
         spend: ads.spend,
@@ -527,19 +809,19 @@
         linkClicks: ads.linkClicks,
         clicksAll: ads.clicksAll,
         outboundClicks: ads.outboundClicks,
-        clicksAllAvailable,
-        outboundAvailable,
-        ctrLink: safeDivide(ads.linkClicks, ads.impressions),
-        linkClickRate: clicksAllAvailable ? safeDivide(ads.linkClicks, ads.clicksAll) : 0,
-        cpcLink: safeDivide(ads.spend, ads.linkClicks),
-        outboundCtr: outboundAvailable ? safeDivide(ads.outboundClicks, ads.impressions) : 0,
-        outboundCpc: outboundAvailable ? safeDivide(ads.spend, ads.outboundClicks) : 0,
-        linkOutboundGap: outboundAvailable ? ads.linkClicks - ads.outboundClicks : 0,
+        clicksAllAvailable: ads.clicksAllAvailable,
+        outboundAvailable: ads.outboundAvailable,
+        ctrLink: ads.ctrLink,
+        linkClickRate: ads.linkClickRate,
+        cpcLink: ads.cpcLink,
+        outboundCtr: ads.outboundCtr,
+        outboundCpc: ads.outboundCpc,
+        linkOutboundGap: ads.linkOutboundGap,
         trafficClicks,
-        trafficCtr: outboundAvailable ? safeDivide(ads.outboundClicks, ads.impressions) : safeDivide(ads.linkClicks, ads.impressions),
-        trafficCpc: safeDivide(ads.spend, trafficClicks),
-        trafficSource: outboundAvailable ? "outbound" : "link",
-        cpm: safeDivide(ads.spend, ads.impressions) * 1000,
+        trafficCtr: ads.trafficCtr,
+        trafficCpc: ads.trafficCpc,
+        trafficSource: ads.trafficSource,
+        cpm: ads.cpm,
         orders: group.orders.size,
         items: group.items,
         purchaseValue: group.purchaseValue,
@@ -560,6 +842,10 @@
       if (b.commissionRoas !== a.commissionRoas) return b.commissionRoas - a.commissionRoas;
       return b.expectedCommission - a.expectedCommission;
     });
+
+    const campaignRows = serializeDimensionRows(campaignAds, campaignCommission, adsTotals.spend);
+    const adSetRows = serializeDimensionRows(adSetAds, adSetCommission, adsTotals.spend);
+    const adIdRows = serializeDimensionRows(adIdAds, adIdCommission, adsTotals.spend);
 
     const attributionMap = groupBy(
       expectedRows,
@@ -626,26 +912,82 @@
 
     const hold = buildHoldAnalysis(expectedRows);
 
+    function buildTrend(mode) {
+      const map = new Map();
+      function ensure(key) {
+        const sortKey = sortPeriodKey(key);
+        const current = map.get(key) || { key, label: key, sortKey, adsStats: emptyAdsStats(), group: groupInit() };
+        map.set(key, current);
+        return current;
+      }
+      adsRows.forEach((row) => {
+        const key = periodKey(adsDateKey(row), mode);
+        if (!key) return;
+        addAdsStats(ensure(key).adsStats, row);
+      });
+      expectedRows.forEach((row) => {
+        const key = periodKey(orderDateKey(row), mode);
+        if (!key) return;
+        addCommissionGroup(ensure(key).group, row, statusType(row));
+      });
+      return [...map.values()]
+        .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+        .map((item) => {
+          const ads = adsMetrics(item.adsStats, flags);
+          const group = serializeGroup(item.key, item.group);
+          const profit = group.expectedCommission - ads.spend;
+          return {
+            key: item.key,
+            label: item.label,
+            sortKey: item.sortKey,
+            ...ads,
+            orders: group.orders,
+            purchaseValue: group.purchaseValue,
+            expectedCommission: group.expectedCommission,
+            completedCommission: group.completedCommission,
+            pendingCommission: group.pendingCommission,
+            profit,
+            commissionRoas: safeDivide(group.expectedCommission, ads.spend),
+            roi: safeDivide(profit, ads.spend),
+            epc: safeDivide(group.expectedCommission, ads.trafficClicks),
+            epcMinusCpc: safeDivide(group.expectedCommission, ads.trafficClicks) - ads.trafficCpc
+          };
+        });
+    }
+
+    const adsDateKeys = adsRows.map(adsDateKey).filter(Boolean);
+    const hasCampaignMetadata = adsRows.some((row) => (
+      !isBlank(getField(row, "Campaign name")) ||
+      !isBlank(getField(row, "Ad set name")) ||
+      !isBlank(getField(row, "Campaign ID")) ||
+      !isBlank(getField(row, "Ad set ID")) ||
+      !isBlank(getField(row, "Ad ID"))
+    ));
+    const summaryRows = meta.adsSummaryRows || [];
+    const sourceSummaryStats = summaryRows.reduce((stats, item) => {
+      addAdsStats(stats, item.row);
+      return stats;
+    }, emptyAdsStats());
+    const dataHealth = {
+      adsRowsSelected: meta.adsRowsSelected || adsRows.length,
+      adsSummaryRowsIgnored: summaryRows.length,
+      adsRowsUsed: adsRows.length,
+      commissionRowsUsed: commissionRows.length,
+      dateRange: dateRangeText(adsDateKeys),
+      dailyBreakdown: new Set(adsDateKeys).size > 1,
+      dateCount: new Set(adsDateKeys).size,
+      sourceSummaryTotals: adsMetrics(sourceSummaryStats, flags),
+      detailTotals: adsTotals,
+      ambiguousDimensionCommissionRows: ambiguousDimensionRows.length,
+      hasCampaignMetadata
+    };
+
     const expectedCommission = commissionTotals.expectedCommission;
     const purchaseValue = commissionTotals.purchaseValue;
     const trafficClicks = outboundAvailable ? adsTotals.outboundClicks : adsTotals.linkClicks;
     const summary = {
       ads: {
-        ...adsTotals,
-        clicksAllAvailable,
-        outboundAvailable,
-        ctrLink: safeDivide(adsTotals.linkClicks, adsTotals.impressions),
-        linkClickRate: clicksAllAvailable ? safeDivide(adsTotals.linkClicks, adsTotals.clicksAll) : 0,
-        cpcLink: safeDivide(adsTotals.spend, adsTotals.linkClicks),
-        outboundCtr: outboundAvailable ? safeDivide(adsTotals.outboundClicks, adsTotals.impressions) : 0,
-        outboundCpc: outboundAvailable ? safeDivide(adsTotals.spend, adsTotals.outboundClicks) : 0,
-        linkOutboundGap: outboundAvailable ? adsTotals.linkClicks - adsTotals.outboundClicks : 0,
-        trafficClicks,
-        trafficCtr: outboundAvailable ? safeDivide(adsTotals.outboundClicks, adsTotals.impressions) : safeDivide(adsTotals.linkClicks, adsTotals.impressions),
-        trafficCpc: safeDivide(adsTotals.spend, trafficClicks),
-        trafficSource: outboundAvailable ? "outbound" : "link",
-        cpm: safeDivide(adsTotals.spend, adsTotals.impressions) * 1000,
-        frequency: safeDivide(adsTotals.impressions, adsTotals.reach)
+        ...adsTotals
       },
       commission: {
         ...commissionTotals,
@@ -671,6 +1013,27 @@
         level: "warning",
         title: "Outbound clicks missing",
         detail: `${missingOutboundFiles.join(", ")} tiada column Outbound clicks. Dashboard guna Link clicks sebagai fallback traffic KPI.`
+      });
+    }
+    if (dataHealth.adsSummaryRowsIgnored > 0) {
+      issues.push({
+        level: "info",
+        title: "Meta summary row ignored",
+        detail: `${dataHealth.adsSummaryRowsIgnored} summary row dibuang supaya spend/click/impression tidak double.`
+      });
+    }
+    if (adsRows.length && !dataHealth.dailyBreakdown) {
+      issues.push({
+        level: "warning",
+        title: "Daily breakdown not detected",
+        detail: "Ads CSV nampak summary range, bukan row harian. Trend daily tidak akan direka."
+      });
+    }
+    if (dataHealth.hasCampaignMetadata && dataHealth.ambiguousDimensionCommissionRows > 0) {
+      issues.push({
+        level: "warning",
+        title: "Ambiguous adset/campaign commission",
+        detail: `${dataHealth.ambiguousDimensionCommissionRows} commission row tidak dipaksa masuk campaign/adset kerana Sub_id4 lama tidak cukup unik.`
       });
     }
     meta.duplicateAds.forEach((item) => {
@@ -715,8 +1078,17 @@
       createdAt: new Date().toISOString(),
       files: meta.files,
       uploadSummary: buildUploadSummary(meta, adsRows, commissionRows),
+      dataHealth,
       summary,
       perAd,
+      campaignRows,
+      adSetRows,
+      adIdRows,
+      trend: {
+        daily: buildTrend("daily"),
+        weekly: buildTrend("weekly"),
+        monthly: buildTrend("monthly")
+      },
       attribution,
       categories,
       products,
@@ -737,6 +1109,8 @@
       duplicateCommissionDetails: [],
       missingClicksAllFiles: [],
       missingOutboundFiles: [],
+      adsRowsSelected: 0,
+      adsSummaryRows: [],
       unknownFiles: []
     };
 
@@ -754,7 +1128,14 @@
         adsFingerprints.set(fingerprint, file.name);
         if (!hasColumns(parsed.headers, ["Clicks (all)"])) meta.missingClicksAllFiles.push(file.name);
         if (!hasColumns(parsed.headers, ["Outbound clicks"])) meta.missingOutboundFiles.push(file.name);
-        adsRows.push(...parsed.rows);
+        meta.adsRowsSelected += parsed.rows.length;
+        parsed.rows.forEach((row, rowIndex) => {
+          if (isMetaSummaryRow(row, parsed.headers)) {
+            meta.adsSummaryRows.push({ fileName: file.name, rowNumber: rowIndex + 2, row });
+            return;
+          }
+          adsRows.push(row);
+        });
         return;
       }
 
@@ -907,6 +1288,8 @@
     return {
       adsFilesSelected: adsSelected,
       adsFilesUsed: adsSelected - meta.duplicateAds.length,
+      adsRowsSelected: meta.adsRowsSelected || adsRows.length,
+      adsSummaryRowsIgnored: (meta.adsSummaryRows || []).length,
       adsRowsUsed: adsRows.length,
       commissionFilesSelected: commissionSelected,
       commissionRowsUsed: commissionRows.length,
@@ -1025,12 +1408,236 @@
     return `<div class="bar-track"><div class="bar-fill" style="width:${width.toFixed(1)}%"></div></div>`;
   }
 
+  function formatSignedMoney(value) {
+    const safe = Number.isFinite(value) ? value : 0;
+    return `${safe > 0 ? "+" : ""}${formatMoney(safe)}`;
+  }
+
+  function formatSeconds(value) {
+    const seconds = Math.round(Number.isFinite(value) ? value : 0);
+    return `${seconds}s`;
+  }
+
+  function chartPoint(value, min, max, index, count, width, height, pad) {
+    const x = count <= 1 ? width / 2 : pad + (index / (count - 1)) * (width - pad * 2);
+    const span = max - min || 1;
+    const y = height - pad - ((value - min) / span) * (height - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }
+
+  function renderLineChart(container, rows, series, emptyText) {
+    if (!container) return;
+    const cleanRows = arrayValue(rows);
+    const activeSeries = series.filter((item) => cleanRows.some((row) => Number.isFinite(item.value(row)) && item.value(row) !== 0));
+    if (!cleanRows.length || !activeSeries.length) {
+      container.innerHTML = `<p class="empty-state">${htmlEscape(emptyText || "Tiada data chart.")}</p>`;
+      return;
+    }
+    const width = 680;
+    const height = 260;
+    const pad = 34;
+    const values = activeSeries.flatMap((item) => cleanRows.map((row) => item.value(row)).filter(Number.isFinite));
+    const min = Math.min(0, ...values);
+    const max = Math.max(1, ...values);
+    const lines = activeSeries.map((item) => {
+      const points = cleanRows.map((row, index) => chartPoint(item.value(row), min, max, index, cleanRows.length, width, height, pad)).join(" ");
+      return `<polyline class="chart-line ${htmlEscape(item.tone || "accent")}" points="${points}"></polyline>`;
+    }).join("");
+    const labels = cleanRows.map((row, index) => {
+      if (index !== 0 && index !== cleanRows.length - 1 && cleanRows.length > 4 && index % Math.ceil(cleanRows.length / 4) !== 0) return "";
+      const x = cleanRows.length <= 1 ? width / 2 : pad + (index / (cleanRows.length - 1)) * (width - pad * 2);
+      return `<text class="chart-axis" x="${x.toFixed(1)}" y="${height - 8}" text-anchor="middle">${htmlEscape(row.label)}</text>`;
+    }).join("");
+    const legend = activeSeries.map((item) => `<span><i class="${htmlEscape(item.tone || "accent")}"></i>${htmlEscape(item.label)}</span>`).join("");
+    const last = cleanRows[cleanRows.length - 1];
+    const latest = activeSeries.map((item) => `<div><span>${htmlEscape(item.label)}</span><strong>${htmlEscape(item.format(item.value(last)))}</strong></div>`).join("");
+    container.innerHTML = `
+      <div class="chart-legend">${legend}</div>
+      <svg class="trend-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Trend chart">
+        <line class="chart-grid" x1="${pad}" y1="${height - pad}" x2="${width - pad}" y2="${height - pad}"></line>
+        <text class="chart-axis" x="${pad}" y="18">${htmlEscape(activeSeries[0].format(max))}</text>
+        <text class="chart-axis" x="${pad}" y="${height - pad - 6}">${htmlEscape(activeSeries[0].format(min))}</text>
+        ${lines}
+        ${labels}
+      </svg>
+      <div class="chart-latest">${latest}</div>
+    `;
+  }
+
+  function currentTrendMode() {
+    const checked = document.querySelector('input[name="trendMode"]:checked');
+    return checked ? checked.value : "daily";
+  }
+
   function verdictForAnalysis(analysis) {
     const roas = analysis.summary.commission.commissionRoas;
     const roi = analysis.summary.commission.roi;
     if (roas >= 1) return { tone: "profit", text: `Untung. Commission ROAS ${formatDecimal(roas)} dan ROI ${formatPercent(roi)}.` };
     if (roas >= 0.5) return { tone: "watch", text: `Belum break-even, tapi ada traction. Commission ROAS ${formatDecimal(roas)}.` };
     return { tone: "loss", text: `Rugi. Commission ROAS ${formatDecimal(roas)} dan ROI ${formatPercent(roi)}.` };
+  }
+
+  function renderTrend(analysis, mode) {
+    const rows = arrayValue(analysis && analysis.trend && analysis.trend[mode]);
+    const status = document.getElementById("trendStatus");
+    if (!analysis) {
+      status.className = "status-panel muted";
+      status.querySelector("span").textContent = "Upload dan analisis CSV untuk lihat trend.";
+      ["moneyTrendChart", "trafficTrendChart", "roasTrendChart", "clickValueTrendChart", "trendTable"].forEach((id) => {
+        document.getElementById(id).innerHTML = "";
+      });
+      return;
+    }
+    const health = analysis.dataHealth || {};
+    if (mode === "daily" && !health.dailyBreakdown) {
+      status.className = "status-panel watch";
+      status.querySelector("span").textContent = "Daily breakdown tidak dikesan dalam Ads CSV. Dashboard tidak reka pecahan harian.";
+    } else {
+      status.className = "status-panel profit";
+      status.querySelector("span").textContent = `${rows.length} period dikesan. Ads ikut Reporting starts, commission ikut Order Time.`;
+    }
+    renderLineChart(document.getElementById("moneyTrendChart"), rows, [
+      { label: "Spend", value: (row) => row.spend, format: formatMoney, tone: "red" },
+      { label: "Expected Comm", value: (row) => row.expectedCommission, format: formatMoney, tone: "green" },
+      { label: "Completed", value: (row) => row.completedCommission, format: formatMoney, tone: "blue" },
+      { label: "Profit", value: (row) => row.profit, format: formatSignedMoney, tone: "amber" }
+    ], "Tiada trend money.");
+    renderLineChart(document.getElementById("trafficTrendChart"), rows, [
+      { label: "Outbound", value: (row) => row.outboundClicks, format: formatNumber, tone: "green" },
+      { label: "Link", value: (row) => row.linkClicks, format: formatNumber, tone: "blue" }
+    ], "Tiada trend traffic.");
+    renderLineChart(document.getElementById("roasTrendChart"), rows, [
+      { label: "Commission ROAS", value: (row) => row.commissionRoas, format: formatDecimal, tone: "green" }
+    ], "Tiada trend ROAS.");
+    renderLineChart(document.getElementById("clickValueTrendChart"), rows, [
+      { label: "EPC", value: (row) => row.epc, format: formatMoney, tone: "green" },
+      { label: "CPC", value: (row) => row.trafficCpc, format: formatMoney, tone: "red" },
+      { label: "EPC-CPC", value: (row) => row.epcMinusCpc, format: formatSignedMoney, tone: "amber" }
+    ], "Tiada trend click value.");
+    renderTable(document.getElementById("trendTable"), [
+      { label: "Period", render: (row) => htmlEscape(row.label) },
+      { label: "Spend", num: true, render: (row) => formatMoney(row.spend) },
+      { label: "Outbound", num: true, render: (row) => formatOutboundClicks(row) },
+      { label: "CPC", num: true, render: (row) => formatTrafficCpc(row) },
+      { label: "Orders", num: true, render: (row) => formatNumber(row.orders) },
+      { label: "Comm", num: true, render: (row) => formatMoney(row.expectedCommission) },
+      { label: "Profit", num: true, render: (row) => `<span class="${row.profit >= 0 ? "profit-text" : "loss-text"}">${formatSignedMoney(row.profit)}</span>` },
+      { label: "ROAS", num: true, render: (row) => formatDecimal(row.commissionRoas) },
+      { label: "EPC", num: true, render: (row) => formatMoney(row.epc) },
+      { label: "EPC-CPC", num: true, render: (row) => `<span class="${row.epcMinusCpc >= 0 ? "profit-text" : "loss-text"}">${formatSignedMoney(row.epcMinusCpc)}</span>` }
+    ], rows, "Tiada trend.");
+  }
+
+  function renderPerformanceRows(container, rows, emptyText) {
+    renderTable(container, [
+      { label: "Name", render: (row) => htmlEscape(row.label || row.key) },
+      { label: "Action", render: (row) => badge(row.action) },
+      { label: "Spend", num: true, render: (row) => formatMoney(row.spend) },
+      { label: "Impr.", num: true, render: (row) => formatNumber(row.impressions) },
+      { label: "Outbound", num: true, render: (row) => formatOutboundClicks(row) },
+      { label: "CPC", num: true, render: (row) => formatTrafficCpc(row) },
+      { label: "Comm", num: true, render: (row) => formatMoney(row.expectedCommission) },
+      { label: "ROAS", num: true, render: (row) => formatDecimal(row.commissionRoas) },
+      { label: "ROI", num: true, render: (row) => `<span class="${row.roi >= 0 ? "profit-text" : "loss-text"}">${formatPercent(row.roi)}</span>` },
+      { label: "EPC", num: true, render: (row) => formatMoney(row.epc) }
+    ], rows, emptyText);
+  }
+
+  function renderCampaignAnalysis(analysis) {
+    const note = document.getElementById("campaignNote");
+    if (!analysis) {
+      note.className = "status-panel muted";
+      note.querySelector("span").textContent = "Upload CSV untuk lihat campaign dan ad set.";
+      ["campaignTable", "adSetTable", "adIdTable"].forEach((id) => {
+        document.getElementById(id).innerHTML = "";
+      });
+      return;
+    }
+    const ambiguous = analysis.dataHealth.ambiguousDimensionCommissionRows || 0;
+    if (!analysis.dataHealth.hasCampaignMetadata) {
+      note.className = "status-panel watch";
+      note.querySelector("span").textContent = "Ads CSV lama tiada campaign/adset/ad ID metadata. Upload export baru untuk page ini.";
+    } else {
+      note.className = `status-panel ${ambiguous ? "watch" : "profit"}`;
+      note.querySelector("span").textContent = ambiguous
+      ? `${ambiguous} commission row tidak dipaksa masuk campaign/adset kerana Sub_id4 lama tidak cukup unik.`
+      : "Campaign/adset commission mapping nampak cukup unik untuk data semasa.";
+    }
+    renderPerformanceRows(document.getElementById("campaignTable"), analysis.campaignRows, "Tiada campaign data.");
+    renderPerformanceRows(document.getElementById("adSetTable"), analysis.adSetRows, "Tiada ad set data.");
+    renderPerformanceRows(document.getElementById("adIdTable"), analysis.adIdRows, "Tiada ad ID data.");
+  }
+
+  function creativeNote(row) {
+    if (row.video25 > 0 && row.videoClickRate < 0.08) return "View ada, click rendah. Check CTA/hook-to-click.";
+    if (row.trafficClicks >= 50 && row.expectedCommission <= 0) return "Click ada, komisyen kosong. Check produk/offer.";
+    if (row.trafficClicks >= 50 && row.commissionRoas >= 0.4) return "Creative ada traction. Boleh test/protect.";
+    return "Observe sampai data cukup.";
+  }
+
+  function renderCreativeAnalysis(analysis) {
+    const rows = arrayValue(analysis && analysis.adIdRows)
+      .filter((row) => row.video25 || row.video50 || row.video75 || row.video100 || row.threeSecondRate)
+      .map((row) => ({ ...row, creativeNote: creativeNote(row) }))
+      .sort((a, b) => b.trafficClicks - a.trafficClicks);
+    const totals = analysis ? analysis.summary.ads : adsMetrics(emptyAdsStats(), { clicksAllAvailable: false, outboundAvailable: false });
+    document.getElementById("creativeSummary").innerHTML = [
+      ["Video 25%", formatNumber(totals.video25), "Total plays at 25%"],
+      ["Video 100%", formatNumber(totals.video100), `Completion ${formatPercent(totals.videoCompletionRate)}`],
+      ["Avg Play Time", formatSeconds(totals.videoAvgTime), "Weighted by impressions"],
+      ["Click Quality", formatPercent(totals.videoClickRate), "Outbound / 25% plays"]
+    ].map(([label, value, note]) => (
+      `<article class="metric-card"><span>${htmlEscape(label)}</span><strong>${htmlEscape(value)}</strong><small>${htmlEscape(note)}</small></article>`
+    )).join("");
+    renderTable(document.getElementById("creativeTable"), [
+      { label: "Creative", render: (row) => htmlEscape(row.label || row.key) },
+      { label: "Spend", num: true, render: (row) => formatMoney(row.spend) },
+      { label: "Outbound", num: true, render: (row) => formatOutboundClicks(row) },
+      { label: "25%", num: true, render: (row) => formatNumber(row.video25) },
+      { label: "50%", num: true, render: (row) => formatNumber(row.video50) },
+      { label: "75%", num: true, render: (row) => formatNumber(row.video75) },
+      { label: "100%", num: true, render: (row) => formatNumber(row.video100) },
+      { label: "Completion", num: true, render: (row) => formatPercent(row.videoCompletionRate) },
+      { label: "Avg Time", num: true, render: (row) => formatSeconds(row.videoAvgTime) },
+      { label: "CP Thru", num: true, render: (row) => row.costPerThruPlay ? formatMoney(row.costPerThruPlay) : "-" },
+      { label: "ROAS", num: true, render: (row) => formatDecimal(row.commissionRoas) },
+      { label: "Note", render: (row) => htmlEscape(row.creativeNote) }
+    ], rows, "Tiada video metric dalam Ads CSV.");
+  }
+
+  function renderDataHealth(analysis) {
+    if (!analysis) {
+      document.getElementById("dataHealthGrid").innerHTML = "";
+      document.getElementById("dataHealthTable").innerHTML = "";
+      document.getElementById("dataHealthIssues").innerHTML = `<p class="empty-state">Belum ada analysis aktif.</p>`;
+      return;
+    }
+    const health = analysis.dataHealth;
+    document.getElementById("dataHealthGrid").innerHTML = [
+      ["Ads Rows Selected", formatNumber(health.adsRowsSelected), "Row asal dalam CSV Ads"],
+      ["Summary Rows Ignored", formatNumber(health.adsSummaryRowsIgnored), "Dibuang untuk elak double count"],
+      ["Detail Rows Used", formatNumber(health.adsRowsUsed), "Row sebenar dikira"],
+      ["Date Range", health.dateRange, health.dailyBreakdown ? `${health.dateCount} daily periods` : "Daily breakdown not detected"],
+      ["Commission Rows", formatNumber(health.commissionRowsUsed), "Rows selepas dedupe"],
+      ["Ambiguous Mapping", formatNumber(health.ambiguousDimensionCommissionRows), "Tidak dipaksa masuk adset/campaign"]
+    ].map(([label, value, note]) => (
+      `<article class="metric-card"><span>${htmlEscape(label)}</span><strong>${htmlEscape(value)}</strong><small>${htmlEscape(note)}</small></article>`
+    )).join("");
+    const source = health.sourceSummaryTotals || {};
+    const detail = health.detailTotals || {};
+    renderTable(document.getElementById("dataHealthTable"), [
+      { label: "Metric", render: (row) => htmlEscape(row.label) },
+      { label: "Summary Row", num: true, render: (row) => row.money ? formatMoney(row.source) : formatNumber(row.source) },
+      { label: "Detail Rows", num: true, render: (row) => row.money ? formatMoney(row.detail) : formatNumber(row.detail) },
+      { label: "Difference", num: true, render: (row) => row.money ? formatMoney(row.detail - row.source) : formatNumber(row.detail - row.source) }
+    ], [
+      { label: "Spend", source: source.spend || 0, detail: detail.spend || 0, money: true },
+      { label: "Impressions", source: source.impressions || 0, detail: detail.impressions || 0 },
+      { label: "Clicks all", source: source.clicksAll || 0, detail: detail.clicksAll || 0 },
+      { label: "Link clicks", source: source.linkClicks || 0, detail: detail.linkClicks || 0 },
+      { label: "Outbound clicks", source: source.outboundClicks || 0, detail: detail.outboundClicks || 0 }
+    ], "Tiada reconciliation.");
+    renderIssuesInto(document.getElementById("dataHealthIssues"), analysis.issues);
   }
 
   function renderAnalysis(analysis) {
@@ -1158,17 +1765,26 @@
     ], analysis.audience, "Tiada data audience.");
 
     renderIssues(analysis.issues);
+    renderTrend(analysis, currentTrendMode());
+    renderCampaignAnalysis(analysis);
+    renderCreativeAnalysis(analysis);
+    renderDataHealth(analysis);
     renderSnapshots(analysis);
     document.getElementById("saveSnapshotBtn").disabled = false;
   }
 
   function renderIssues(issues) {
-    const container = document.getElementById("issuesList");
-    if (!issues.length) {
+    renderIssuesInto(document.getElementById("issuesList"), issues);
+  }
+
+  function renderIssuesInto(container, issues) {
+    if (!container) return;
+    const rows = arrayValue(issues);
+    if (!rows.length) {
       container.innerHTML = `<p class="empty-state">Tiada isu tracking dikesan.</p>`;
       return;
     }
-    container.innerHTML = issues.map((issue) => (
+    container.innerHTML = rows.map((issue) => (
       `<div class="issue-item ${htmlEscape(issue.level)}"><strong>${htmlEscape(issue.title)}</strong><span>${htmlEscape(issue.detail)}</span></div>`
     )).join("");
   }
@@ -1183,7 +1799,8 @@
     }
     container.className = "upload-summary active";
     const stats = [
-      ["Ads Files Used", `${summary.adsFilesUsed}/${summary.adsFilesSelected}`, `${summary.adsRowsUsed} rows`],
+      ["Ads Files Used", `${summary.adsFilesUsed}/${summary.adsFilesSelected}`, `${summary.adsRowsUsed}/${summary.adsRowsSelected} detail rows`],
+      ["Meta Summary Ignored", `${summary.adsSummaryRowsIgnored}`, "Prevent double count"],
       ["Commission Files", `${summary.commissionFilesSelected}`, `${summary.commissionRowsUsed} rows used`],
       ["Duplicate Ignored", `${summary.duplicateAdsIgnored + summary.duplicateCommissionRowsIgnored}`, `${summary.duplicateCommissionRowsIgnored} commission rows`],
       ["Unknown Files", `${summary.unknownFiles}`, "Rejected CSV"]
@@ -1209,6 +1826,10 @@
     document.getElementById("holdTable").innerHTML = "";
     document.getElementById("audienceTable").innerHTML = "";
     document.getElementById("issuesList").innerHTML = `<p class="empty-state">Belum ada analysis aktif.</p>`;
+    renderTrend(null, "daily");
+    renderCampaignAnalysis(null);
+    renderCreativeAnalysis(null);
+    renderDataHealth(null);
     document.getElementById("snapshotComparePanel").innerHTML = "";
     document.getElementById("snapshotName").value = "";
     document.getElementById("snapshotCompare").value = "";
@@ -1235,8 +1856,13 @@
       appVersion: CORE_VERSION,
       files: cloneForSnapshot(analysis.files),
       uploadSummary: cloneForSnapshot(analysis.uploadSummary),
+      dataHealth: cloneForSnapshot(analysis.dataHealth),
       summary: cloneForSnapshot(analysis.summary),
       perAd: cloneForSnapshot(analysis.perAd),
+      campaignRows: cloneForSnapshot(analysis.campaignRows),
+      adSetRows: cloneForSnapshot(analysis.adSetRows),
+      adIdRows: cloneForSnapshot(analysis.adIdRows),
+      trend: cloneForSnapshot(analysis.trend),
       attribution: cloneForSnapshot(analysis.attribution),
       categories: cloneForSnapshot(analysis.categories),
       products: cloneForSnapshot(analysis.products),
@@ -1590,16 +2216,49 @@
   }
 
   function setActivePage(page) {
-    const isVideo = page === "video";
-    document.body.dataset.page = isVideo ? "video" : "performance";
-    document.getElementById("performancePage").hidden = isVideo;
-    document.getElementById("videoPage").hidden = !isVideo;
-    document.getElementById("performanceActions").hidden = isVideo;
-    document.getElementById("appTitle").textContent = isVideo ? "Video Converter" : "Performance Dashboard";
-    document.getElementById("pageEyebrow").textContent = isVideo ? "Browser Video Tool" : "Shopee Affiliate Cookies";
-    document.querySelectorAll("[data-page-target]").forEach((button) => {
-      button.classList.toggle("active", button.dataset.pageTarget === (isVideo ? "video" : "performance"));
+    const pages = {
+      overview: { title: "Overview Dashboard", eyebrow: "Shopee Affiliate Cookies" },
+      trend: { title: "Trend Analytics", eyebrow: "Daily Weekly Monthly" },
+      campaign: { title: "Campaign & Ad Set", eyebrow: "Meta Ads Breakdown" },
+      creative: { title: "Creative Video", eyebrow: "Video Performance" },
+      health: { title: "Data Health", eyebrow: "Accuracy Check" },
+      video: { title: "Video Converter", eyebrow: "Browser Video Tool" }
+    };
+    const target = pages[page] ? page : "overview";
+    const isVideo = target === "video";
+    document.body.dataset.page = target;
+    Object.keys(pages).forEach((key) => {
+      const el = document.getElementById(`${key}Page`);
+      if (el) el.hidden = key !== target;
     });
+    document.getElementById("performanceActions").hidden = isVideo;
+    document.getElementById("appTitle").textContent = pages[target].title;
+    document.getElementById("pageEyebrow").textContent = pages[target].eyebrow;
+    document.querySelectorAll("[data-page-target]").forEach((button) => {
+      button.classList.toggle("active", button.dataset.pageTarget === target);
+    });
+    closeMobileSidebar();
+  }
+
+  function setSidebarCollapsed(collapsed) {
+    document.body.classList.toggle("sidebar-collapsed", collapsed);
+    const toggle = document.getElementById("sidebarToggle");
+    if (toggle) {
+      toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      toggle.textContent = collapsed ? "Open" : "Hide";
+    }
+  }
+
+  function openMobileSidebar() {
+    document.body.classList.add("sidebar-opened");
+    const backdrop = document.getElementById("sidebarBackdrop");
+    if (backdrop) backdrop.hidden = false;
+  }
+
+  function closeMobileSidebar() {
+    document.body.classList.remove("sidebar-opened");
+    const backdrop = document.getElementById("sidebarBackdrop");
+    if (backdrop) backdrop.hidden = true;
   }
 
   function setVideoStatus(tone, message) {
@@ -2229,9 +2888,27 @@
     const saveBtn = document.getElementById("saveSnapshotBtn");
     const clearBtn = document.getElementById("clearBtn");
     const compareSelect = document.getElementById("snapshotCompare");
+    const sidebarToggle = document.getElementById("sidebarToggle");
+    const sidebarOpenBtn = document.getElementById("sidebarOpenBtn");
+    const sidebarBackdrop = document.getElementById("sidebarBackdrop");
 
     document.querySelectorAll("[data-page-target]").forEach((button) => {
       button.addEventListener("click", () => setActivePage(button.dataset.pageTarget));
+    });
+    if (sidebarToggle) {
+      sidebarToggle.addEventListener("click", () => {
+        if (window.matchMedia("(max-width: 900px)").matches) {
+          closeMobileSidebar();
+          return;
+        }
+        setSidebarCollapsed(!document.body.classList.contains("sidebar-collapsed"));
+      });
+    }
+    if (sidebarOpenBtn) sidebarOpenBtn.addEventListener("click", openMobileSidebar);
+    if (sidebarBackdrop) sidebarBackdrop.addEventListener("click", closeMobileSidebar);
+    setSidebarCollapsed(false);
+    document.querySelectorAll('input[name="trendMode"]').forEach((input) => {
+      input.addEventListener("change", () => renderTrend(currentAnalysis, currentTrendMode()));
     });
     const videoReady = initVideoConverter();
     renderSnapshots(null);

@@ -1,5 +1,5 @@
-const APP_BUILD_VERSION = "mobile-friendly-v13";
-const CACHE_NAME = "shopee-dashboard-v13";
+const APP_BUILD_VERSION = "trend-charts-v14";
+const CACHE_NAME = "shopee-dashboard-v14";
 const APP_SHELL = [
   "./",
   "./index.html",

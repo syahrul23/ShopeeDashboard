@@ -47,6 +47,10 @@ select {
   grid-template-columns: 238px minmax(0, 1fr);
 }
 
+.sidebar-collapsed .app-shell {
+  grid-template-columns: 72px minmax(0, 1fr);
+}
+
 .app-sidebar {
   position: sticky;
   top: 0;
@@ -58,6 +62,13 @@ select {
   flex-direction: column;
   gap: 18px;
   z-index: 7;
+}
+
+.sidebar-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .sidebar-brand span {
@@ -73,6 +84,22 @@ select {
   margin-top: 4px;
   font-size: 21px;
   line-height: 1.1;
+}
+
+.sidebar-toggle,
+.sidebar-open {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 900;
+  padding: 0 10px;
+}
+
+.sidebar-open {
+  display: none;
 }
 
 .sidebar-nav {
@@ -99,6 +126,35 @@ select {
   border-color: #b7d5d0;
 }
 
+.sidebar-collapsed .app-sidebar {
+  padding: 12px 10px;
+}
+
+.sidebar-collapsed .sidebar-brand {
+  display: none;
+}
+
+.sidebar-collapsed .sidebar-top {
+  justify-content: center;
+}
+
+.sidebar-collapsed .sidebar-toggle,
+.sidebar-collapsed .nav-btn {
+  width: 100%;
+  padding: 0 6px;
+  text-align: center;
+  font-size: 12px;
+}
+
+.sidebar-collapsed .nav-btn {
+  min-height: 50px;
+  overflow-wrap: anywhere;
+}
+
+.sidebar-backdrop {
+  display: none;
+}
+
 .app-frame {
   min-width: 0;
 }
@@ -114,6 +170,10 @@ select {
   position: sticky;
   top: 0;
   z-index: 5;
+}
+
+.header-copy {
+  min-width: 0;
 }
 
 .eyebrow {
@@ -526,9 +586,118 @@ th.num {
   background: #fffbeb;
 }
 
+.issue-item.info {
+  border-color: #b7d5d0;
+  background: #f0fdfa;
+}
+
 .issue-item.error {
   border-color: #fecdd3;
   background: #fff1f2;
+}
+
+.chart-mode-control {
+  min-width: min(360px, 100%);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.chart-card {
+  min-height: 260px;
+  display: grid;
+  gap: 10px;
+}
+
+.trend-chart {
+  width: 100%;
+  min-height: 230px;
+}
+
+.chart-line {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chart-line.green,
+.chart-legend i.green {
+  stroke: var(--green);
+  background: var(--green);
+}
+
+.chart-line.red,
+.chart-legend i.red {
+  stroke: var(--red);
+  background: var(--red);
+}
+
+.chart-line.blue,
+.chart-legend i.blue {
+  stroke: var(--blue);
+  background: var(--blue);
+}
+
+.chart-line.amber,
+.chart-legend i.amber {
+  stroke: var(--amber);
+  background: var(--amber);
+}
+
+.chart-line.accent,
+.chart-legend i.accent {
+  stroke: var(--accent);
+  background: var(--accent);
+}
+
+.chart-grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.chart-axis {
+  fill: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.chart-legend,
+.chart-latest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chart-legend span,
+.chart-latest div {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fbfcfd;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 5px 8px;
+}
+
+.chart-legend i {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  margin-right: 6px;
+}
+
+.chart-latest div {
+  border-radius: 8px;
+}
+
+.chart-latest span,
+.chart-latest strong {
+  display: block;
+}
+
+.chart-latest strong {
+  color: var(--text);
+  margin-top: 2px;
 }
 
 .snapshot-item {
@@ -982,28 +1151,63 @@ th.num {
 }
 
 @media (max-width: 900px) {
-  .app-shell {
+  .app-shell,
+  .sidebar-collapsed .app-shell {
     grid-template-columns: 1fr;
   }
 
   .app-sidebar {
-    position: static;
-    height: auto;
-    padding: 12px 14px;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(82vw, 310px);
+    height: 100vh;
+    padding: 14px;
+    border-right: 1px solid var(--line);
+    border-bottom: 0;
+    transform: translateX(-105%);
+    transition: transform 180ms ease;
+    box-shadow: var(--shadow);
+    z-index: 30;
   }
 
-  .sidebar-brand {
+  .sidebar-opened .app-sidebar {
+    transform: translateX(0);
+  }
+
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    display: block;
+    border: 0;
+    background: rgba(15, 23, 42, 0.28);
+    z-index: 20;
+  }
+
+  .sidebar-backdrop[hidden] {
     display: none;
   }
 
-  .sidebar-nav {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .sidebar-brand {
+    display: block;
   }
 
-  .nav-btn {
-    text-align: center;
+  .sidebar-nav {
+    grid-template-columns: 1fr;
+  }
+
+  .nav-btn,
+  .sidebar-collapsed .nav-btn {
+    min-height: 44px;
+    text-align: left;
+    font-size: 14px;
+  }
+
+  .sidebar-collapsed .sidebar-brand {
+    display: block;
+  }
+
+  .sidebar-open {
+    display: inline-flex;
   }
 
   .app-header,
