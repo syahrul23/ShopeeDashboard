@@ -786,6 +786,158 @@ th.num {
   text-align: right;
 }
 
+.video-queue-wrap {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  margin: 16px 0;
+  overflow: hidden;
+}
+
+.queue-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  padding: 12px;
+}
+
+.queue-heading span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.video-queue-list {
+  display: grid;
+}
+
+.video-queue-list .empty-state {
+  padding: 14px 12px;
+}
+
+.video-queue-item {
+  display: grid;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  padding: 12px;
+}
+
+.video-queue-item:last-child {
+  border-bottom: 0;
+}
+
+.video-queue-item.selected {
+  background: #f8fbfa;
+}
+
+.queue-select {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.queue-index,
+.queue-status {
+  border-radius: 999px;
+  min-width: 30px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 900;
+  text-align: center;
+}
+
+.queue-index {
+  background: #eef2f7;
+  color: var(--muted);
+}
+
+.queue-status.profit {
+  background: #dcfce7;
+  color: var(--green);
+}
+
+.queue-status.loss {
+  background: #fee2e2;
+  color: var(--red);
+}
+
+.queue-status.watch {
+  background: #fef3c7;
+  color: var(--amber);
+}
+
+.queue-status.muted {
+  background: #eef2f7;
+  color: var(--muted);
+}
+
+.queue-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 900;
+}
+
+.queue-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.queue-meta span,
+.queue-download-placeholder {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 8px;
+}
+
+.queue-meta span.profit-text {
+  border-color: #bbf7d0;
+  color: var(--green);
+}
+
+.queue-meta span.watch-text {
+  border-color: #fde68a;
+  color: var(--amber);
+}
+
+.queue-meta span.muted-text {
+  color: var(--muted);
+}
+
+.queue-error {
+  border-radius: 8px;
+  background: #fff1f2;
+  color: var(--red);
+  font-size: 13px;
+  padding: 8px 10px;
+}
+
+.queue-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.queue-download {
+  min-height: 34px;
+  padding: 0 12px;
+}
+
 .video-log-wrap {
   border: 1px solid var(--line);
   border-radius: 8px;

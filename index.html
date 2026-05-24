@@ -172,7 +172,7 @@
                 </div>
                 <label class="file-picker video-picker" for="videoFileInput">
                   <span>Pilih Video</span>
-                  <input id="videoFileInput" type="file" accept="video/*">
+                  <input id="videoFileInput" type="file" accept="video/*" multiple>
                 </label>
                 <div id="videoFileName" class="file-list" aria-live="polite"></div>
                 <div id="videoWarning" class="issue-item warning video-warning" hidden></div>
@@ -227,15 +227,21 @@
                   </select>
                 </label>
                 <div class="converter-actions">
-                  <button id="convertVideoBtn" class="btn primary" type="button" disabled>Convert</button>
-                  <a id="downloadVideoLink" class="btn secondary disabled" href="#" download="converted-video.mp4" aria-disabled="true">Download MP4</a>
-                  <button id="resetVideoBtn" class="btn ghost" type="button">Reset Video</button>
+                  <button id="convertVideoBtn" class="btn primary" type="button" disabled>Convert Queue</button>
+                  <button id="resetVideoBtn" class="btn ghost" type="button">Reset Queue</button>
                 </div>
                 <div class="progress-wrap" aria-live="polite">
                   <div class="progress-track"><div id="videoProgressFill" class="progress-fill"></div></div>
                   <span id="videoProgressText">0%</span>
                 </div>
                 <div id="videoOutputSummary" class="upload-summary" aria-live="polite"></div>
+                <div class="video-queue-wrap">
+                  <div class="queue-heading">
+                    <strong>Download List</strong>
+                    <span id="videoQueueCount">0 video</span>
+                  </div>
+                  <div id="videoQueueList" class="video-queue-list" aria-live="polite"></div>
+                </div>
                 <div class="video-log-wrap">
                   <strong>Process Log</strong>
                   <div id="videoLog" class="video-log">Belum ada proses.</div>
