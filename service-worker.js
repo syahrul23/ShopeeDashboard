@@ -1,5 +1,5 @@
-const APP_BUILD_VERSION = "video-queue-v10";
-const CACHE_NAME = "shopee-dashboard-v10";
+const APP_BUILD_VERSION = "click-quality-v11";
+const CACHE_NAME = "shopee-dashboard-v11";
 const APP_SHELL = [
   "./",
   "./index.html",

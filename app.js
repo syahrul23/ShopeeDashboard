@@ -3,7 +3,7 @@
 
   const STORAGE_KEY = "shopeeDashboardSnapshots:v1";
   const CORE_VERSION = "1.0.0";
-  const APP_BUILD_VERSION = "video-queue-v10";
+  const APP_BUILD_VERSION = "click-quality-v11";
   const SCRIPT_BUILD_VERSION = typeof document !== "undefined" && document.currentScript ? document.currentScript.dataset.appBuild || "" : "";
   const FFMPEG_VERSION = "0.12.15";
   const FFMPEG_CORE_VERSION = "0.12.10";
@@ -434,6 +434,8 @@
 
   function computeAnalysis(adsRows, commissionRows, meta) {
     const adsByAd = new Map();
+    const missingClicksAllFiles = meta.missingClicksAllFiles || [];
+    const clicksAllAvailable = adsRows.length > 0 && !missingClicksAllFiles.length;
     const adsTotals = {
       spend: 0,
       impressions: 0,
@@ -515,7 +517,9 @@
         reach: ads.reach,
         linkClicks: ads.linkClicks,
         clicksAll: ads.clicksAll,
+        clicksAllAvailable,
         ctrLink: safeDivide(ads.linkClicks, ads.impressions),
+        linkClickRate: clicksAllAvailable ? safeDivide(ads.linkClicks, ads.clicksAll) : 0,
         cpcLink: safeDivide(ads.spend, ads.linkClicks),
         cpm: safeDivide(ads.spend, ads.impressions) * 1000,
         orders: group.orders.size,
@@ -562,10 +566,11 @@
       const age = String(getField(row, "Age") || "Unknown").trim() || "Unknown";
       const gender = String(getField(row, "Gender") || "Unknown").trim() || "Unknown";
       const key = `${age} | ${gender}`;
-      const current = audience.get(key) || { age, gender, spend: 0, impressions: 0, linkClicks: 0 };
+      const current = audience.get(key) || { age, gender, spend: 0, impressions: 0, linkClicks: 0, clicksAll: 0 };
       current.spend += parseNumber(getField(row, "Amount spent (MYR)"));
       current.impressions += parseNumber(getField(row, "Impressions"));
       current.linkClicks += parseNumber(getField(row, "Link clicks"));
+      current.clicksAll += parseNumber(getField(row, "Clicks (all)"));
       audience.set(key, current);
     });
 
@@ -585,7 +590,9 @@
     const audienceRows = [...audience.values()]
       .map((row) => ({
         ...row,
+        clicksAllAvailable,
         ctr: safeDivide(row.linkClicks, row.impressions),
+        linkClickRate: clicksAllAvailable ? safeDivide(row.linkClicks, row.clicksAll) : 0,
         cpc: safeDivide(row.spend, row.linkClicks)
       }))
       .sort((a, b) => b.spend - a.spend);
@@ -597,7 +604,9 @@
     const summary = {
       ads: {
         ...adsTotals,
+        clicksAllAvailable,
         ctrLink: safeDivide(adsTotals.linkClicks, adsTotals.impressions),
+        linkClickRate: clicksAllAvailable ? safeDivide(adsTotals.linkClicks, adsTotals.clicksAll) : 0,
         cpcLink: safeDivide(adsTotals.spend, adsTotals.linkClicks),
         cpm: safeDivide(adsTotals.spend, adsTotals.impressions) * 1000,
         frequency: safeDivide(adsTotals.impressions, adsTotals.reach)
@@ -614,6 +623,13 @@
     const issues = [];
     if (!adsRows.length) issues.push({ level: "error", title: "Ads CSV missing", detail: "Tiada fail Ads dikesan dalam upload ini." });
     if (!commissionRows.length) issues.push({ level: "error", title: "Commission CSV missing", detail: "Tiada fail Affiliate Commission dikesan dalam upload ini." });
+    if (missingClicksAllFiles.length > 0) {
+      issues.push({
+        level: "warning",
+        title: "Clicks (all) missing",
+        detail: `${missingClicksAllFiles.join(", ")} tiada column Clicks (all), jadi Total Clicks dan Link/Total % tidak lengkap.`
+      });
+    }
     meta.duplicateAds.forEach((item) => {
       issues.push({ level: "warning", title: "Duplicate Ads CSV ignored", detail: `${item.name} sama seperti ${item.original}.` });
     });
@@ -676,6 +692,7 @@
       files: [],
       duplicateAds: [],
       duplicateCommissionDetails: [],
+      missingClicksAllFiles: [],
       unknownFiles: []
     };
 
@@ -691,6 +708,7 @@
           return;
         }
         adsFingerprints.set(fingerprint, file.name);
+        if (!hasColumns(parsed.headers, ["Clicks (all)"])) meta.missingClicksAllFiles.push(file.name);
         adsRows.push(...parsed.rows);
         return;
       }
@@ -754,6 +772,14 @@
 
   function formatPercent(value) {
     return `${formatDecimal((Number.isFinite(value) ? value : 0) * 100)}%`;
+  }
+
+  function formatTotalClicks(row) {
+    return row && row.clicksAllAvailable ? formatNumber(row.clicksAll) : "-";
+  }
+
+  function formatLinkClickRate(row) {
+    return row && row.clicksAllAvailable && row.clicksAll > 0 ? formatPercent(row.linkClickRate) : "-";
   }
 
   function duplicateDetailText(details) {
@@ -948,7 +974,7 @@
     document.getElementById("statusMessage").textContent = verdict.text;
 
     document.getElementById("kpiSpend").textContent = formatMoney(summary.ads.spend);
-    document.getElementById("kpiTraffic").textContent = `${formatNumber(summary.ads.linkClicks)} link clicks | CPC ${formatMoney(summary.ads.cpcLink)}`;
+    document.getElementById("kpiTraffic").textContent = `Link ${formatNumber(summary.ads.linkClicks)} / Total ${formatTotalClicks(summary.ads)} | CPC ${formatMoney(summary.ads.cpcLink)}`;
     document.getElementById("kpiExpected").textContent = formatMoney(summary.commission.expectedCommission);
     document.getElementById("kpiCompleted").textContent = `Completed ${formatMoney(summary.commission.completedCommission)}`;
     document.getElementById("kpiRoas").textContent = formatDecimal(summary.commission.commissionRoas);
@@ -965,6 +991,8 @@
     const metrics = [
       ["Impressions", formatNumber(summary.ads.impressions), `Reach ${formatNumber(summary.ads.reach)}`],
       ["CTR Link", formatPercent(summary.ads.ctrLink), `CPM ${formatMoney(summary.ads.cpm)}`],
+      ["Total Clicks", formatTotalClicks(summary.ads), `Link Clicks ${formatNumber(summary.ads.linkClicks)}`],
+      ["Link / Total Click", formatLinkClickRate(summary.ads), "Kualiti klik ke Shopee"],
       ["Orders Expected", formatNumber(summary.commission.orders), `${summary.commission.items} item rows`],
       ["Purchase Value", formatMoney(summary.commission.purchaseValue), `GMV ROAS ${formatDecimal(summary.commission.gmvRoas)}`],
       ["Pending Commission", formatMoney(summary.commission.pendingCommission), "Belum confirmed"],
@@ -984,8 +1012,11 @@
       { label: "Ad", render: (row) => htmlEscape(row.adNo) },
       { label: "Action", render: (row) => badge(row.action) },
       { label: "Spend", num: true, render: (row) => formatMoney(row.spend) },
-      { label: "Clicks", num: true, render: (row) => formatNumber(row.linkClicks) },
+      { label: "Link Clicks", num: true, render: (row) => formatNumber(row.linkClicks) },
+      { label: "Total Clicks", num: true, render: (row) => formatTotalClicks(row) },
+      { label: "Link/Total %", num: true, render: (row) => formatLinkClickRate(row) },
       { label: "CPC", num: true, render: (row) => formatMoney(row.cpcLink) },
+      { label: "EPC", num: true, render: (row) => formatMoney(row.epc) },
       { label: "Orders", num: true, render: (row) => formatNumber(row.orders) },
       { label: "Comm", num: true, render: (row) => formatMoney(row.expectedCommission) },
       { label: "ROAS", num: true, render: (row) => formatDecimal(row.commissionRoas) },
@@ -1041,7 +1072,9 @@
       { label: "Gender", render: (row) => htmlEscape(row.gender) },
       { label: "Spend", num: true, render: (row) => formatMoney(row.spend) },
       { label: "Impr.", num: true, render: (row) => formatNumber(row.impressions) },
-      { label: "Clicks", num: true, render: (row) => formatNumber(row.linkClicks) },
+      { label: "Link Clicks", num: true, render: (row) => formatNumber(row.linkClicks) },
+      { label: "Total Clicks", num: true, render: (row) => formatTotalClicks(row) },
+      { label: "Link/Total %", num: true, render: (row) => formatLinkClickRate(row) },
       { label: "CTR", num: true, render: (row) => formatPercent(row.ctr) },
       { label: "CPC", num: true, render: (row) => formatMoney(row.cpc) }
     ], analysis.audience, "Tiada data audience.");
@@ -1183,6 +1216,8 @@
     const metrics = [
       ["Spend", "ads.spend", "money", "neutral"],
       ["Link Clicks", "ads.linkClicks", "number", "higher"],
+      ["Total Clicks", "ads.clicksAll", "number", "higher"],
+      ["Link/Total %", "ads.linkClickRate", "percent", "higher"],
       ["Expected Comm", "commission.expectedCommission", "money", "higher"],
       ["Completed Comm", "commission.completedCommission", "money", "higher"],
       ["Orders", "commission.orders", "number", "higher"],
@@ -1300,7 +1335,9 @@
           render: (currentRow, previousRow) => `<div class="compare-cell"><strong>${htmlEscape(actionLabel(currentRow && currentRow.action))}</strong><small>Snapshot ${htmlEscape(actionLabel(previousRow && previousRow.action))}</small></div>`
         },
         { label: "Spend", path: "spend", type: "money", direction: "neutral", num: true },
-        { label: "Clicks", path: "linkClicks", type: "number", direction: "higher", num: true },
+        { label: "Link Clicks", path: "linkClicks", type: "number", direction: "higher", num: true },
+        { label: "Total Clicks", path: "clicksAll", type: "number", direction: "higher", num: true },
+        { label: "Link/Total %", path: "linkClickRate", type: "percent", direction: "higher", num: true },
         { label: "Orders", path: "orders", type: "number", direction: "higher", num: true },
         { label: "Comm", path: "expectedCommission", type: "money", direction: "higher", num: true },
         { label: "ROAS", path: "commissionRoas", type: "decimal", direction: "higher", num: true },
@@ -1374,7 +1411,9 @@
       [
         { label: "Spend", path: "spend", type: "money", direction: "neutral", num: true },
         { label: "Impr.", path: "impressions", type: "number", direction: "higher", num: true },
-        { label: "Clicks", path: "linkClicks", type: "number", direction: "higher", num: true },
+        { label: "Link Clicks", path: "linkClicks", type: "number", direction: "higher", num: true },
+        { label: "Total Clicks", path: "clicksAll", type: "number", direction: "higher", num: true },
+        { label: "Link/Total %", path: "linkClickRate", type: "percent", direction: "higher", num: true },
         { label: "CTR", path: "ctr", type: "percent", direction: "higher", num: true },
         { label: "CPC", path: "cpc", type: "money", direction: "lower", num: true }
       ],
