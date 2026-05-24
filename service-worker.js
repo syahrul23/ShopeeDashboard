@@ -1,5 +1,5 @@
-const APP_BUILD_VERSION = "outbound-traffic-v12";
-const CACHE_NAME = "shopee-dashboard-v12";
+const APP_BUILD_VERSION = "mobile-friendly-v13";
+const CACHE_NAME = "shopee-dashboard-v13";
 const APP_SHELL = [
   "./",
   "./index.html",

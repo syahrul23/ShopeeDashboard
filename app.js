@@ -3,7 +3,7 @@
 
   const STORAGE_KEY = "shopeeDashboardSnapshots:v1";
   const CORE_VERSION = "1.0.0";
-  const APP_BUILD_VERSION = "outbound-traffic-v12";
+  const APP_BUILD_VERSION = "mobile-friendly-v13";
   const SCRIPT_BUILD_VERSION = typeof document !== "undefined" && document.currentScript ? document.currentScript.dataset.appBuild || "" : "";
   const FFMPEG_VERSION = "0.12.15";
   const FFMPEG_CORE_VERSION = "0.12.10";
@@ -1007,7 +1007,7 @@
     const body = rows.map((row) => {
       const cells = columns.map((column) => {
         const value = column.render ? column.render(row) : row[column.key];
-        return `<td class="${column.num ? "num" : ""}">${value}</td>`;
+        return `<td class="${column.num ? "num" : ""}" data-label="${htmlEscape(column.label)}">${value}</td>`;
       }).join("");
       return `<tr>${cells}</tr>`;
     }).join("");
@@ -1390,8 +1390,10 @@
       const previousRow = previousMap.get(key);
       const status = currentRow && previousRow ? "" : currentRow ? "Baru" : "Hilang";
       const statusBadge = status ? `<span class="compare-status">${htmlEscape(status)}</span>` : "";
-      const cells = columns.map((column) => `<td class="${column.num ? "num" : ""}">${renderCompareCell(currentRow, previousRow, column)}</td>`).join("");
-      return `<tr><td><strong>${htmlEscape(key)}</strong>${statusBadge}</td>${cells}</tr>`;
+      const cells = columns.map((column) => (
+        `<td class="${column.num ? "num" : ""}" data-label="${htmlEscape(column.label)}">${renderCompareCell(currentRow, previousRow, column)}</td>`
+      )).join("");
+      return `<tr><td data-label="Key"><strong>${htmlEscape(key)}</strong>${statusBadge}</td>${cells}</tr>`;
     }).join("");
     const note = !previous.length && current.length ? `<p class="compare-note">Snapshot lama mungkin belum simpan data section ini.</p>` : "";
 
