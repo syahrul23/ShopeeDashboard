@@ -740,6 +740,49 @@
     return `${details.length} row duplicate dibuang. Order: ${shown || "unknown"}${more}. File: ${filePairs}.`;
   }
 
+  function cloneForSnapshot(value) {
+    return JSON.parse(JSON.stringify(value || null));
+  }
+
+  function arrayValue(value) {
+    return Array.isArray(value) ? value : [];
+  }
+
+  function numberValue(value) {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  function nestedValue(source, path) {
+    return path.split(".").reduce((current, key) => (current && current[key] != null ? current[key] : 0), source);
+  }
+
+  function formatByType(value, type) {
+    if (type === "money") return formatMoney(value);
+    if (type === "percent") return formatPercent(value);
+    if (type === "decimal") return formatDecimal(value);
+    if (type === "duration") return formatDuration(value);
+    return formatNumber(value);
+  }
+
+  function deltaClass(delta, direction = "higher") {
+    if (!delta) return "muted-text";
+    if (direction === "lower") return delta <= 0 ? "profit-text" : "loss-text";
+    if (direction === "neutral") return "watch-text";
+    return delta >= 0 ? "profit-text" : "loss-text";
+  }
+
+  function renderDelta(current, previous, type, direction) {
+    const delta = numberValue(current) - numberValue(previous);
+    const sign = delta > 0 ? "+" : "";
+    return `<span class="delta ${deltaClass(delta, direction)}">${sign}${formatByType(delta, type)}</span>`;
+  }
+
+  function actionLabel(action) {
+    if (!action) return "-";
+    if (typeof action === "string") return action;
+    return action.label || "-";
+  }
+
   function buildUploadSummary(meta, adsRows, commissionRows) {
     const adsSelected = meta.files.filter((file) => file.type === "ads").length;
     const commissionSelected = meta.files.filter((file) => file.type === "commission").length;
@@ -992,14 +1035,17 @@
       id: `${Date.now()}`,
       name: name || `Snapshot ${new Date().toLocaleString("ms-MY")}`,
       createdAt: new Date().toISOString(),
-      summary: analysis.summary,
-      perAd: analysis.perAd.slice(0, 20).map((row) => ({
-        adNo: row.adNo,
-        spend: row.spend,
-        expectedCommission: row.expectedCommission,
-        commissionRoas: row.commissionRoas,
-        action: row.action.label
-      }))
+      appVersion: CORE_VERSION,
+      files: cloneForSnapshot(analysis.files),
+      uploadSummary: cloneForSnapshot(analysis.uploadSummary),
+      summary: cloneForSnapshot(analysis.summary),
+      perAd: cloneForSnapshot(analysis.perAd),
+      attribution: cloneForSnapshot(analysis.attribution),
+      categories: cloneForSnapshot(analysis.categories),
+      products: cloneForSnapshot(analysis.products),
+      hold: cloneForSnapshot(analysis.hold),
+      audience: cloneForSnapshot(analysis.audience),
+      issues: cloneForSnapshot(analysis.issues)
     };
   }
 
@@ -1036,9 +1082,250 @@
     });
   }
 
+  function renderCompareMetric(label, current, previous, type, direction) {
+    return `
+      <div class="compare-metric">
+        <span>${htmlEscape(label)}</span>
+        <strong>${formatByType(current, type)}</strong>
+        <small>Snapshot ${formatByType(previous, type)} ${renderDelta(current, previous, type, direction)}</small>
+      </div>`;
+  }
+
+  function renderKpiCompare(currentAnalysis, snapshot) {
+    const current = currentAnalysis.summary || {};
+    const previous = snapshot.summary || {};
+    const metrics = [
+      ["Spend", "ads.spend", "money", "neutral"],
+      ["Link Clicks", "ads.linkClicks", "number", "higher"],
+      ["Expected Comm", "commission.expectedCommission", "money", "higher"],
+      ["Completed Comm", "commission.completedCommission", "money", "higher"],
+      ["Orders", "commission.orders", "number", "higher"],
+      ["Commission ROAS", "commission.commissionRoas", "decimal", "higher"],
+      ["ROI", "commission.roi", "percent", "higher"],
+      ["Avg Comm Rate", "commission.avgCommissionRate", "percent", "higher"],
+      ["Purchase Value", "commission.purchaseValue", "money", "higher"],
+      ["BE GMV ROAS", "commission.breakEvenGmvRoas", "decimal", "lower"],
+      ["Same-day Hold", "hold.sameDayRate", "percent", "higher"],
+      ["Delayed Orders", "hold.delayedRate", "percent", "lower"]
+    ];
+
+    const cards = metrics.map(([label, path, type, direction]) => {
+      const currentSource = path.startsWith("hold.") ? currentAnalysis : current;
+      const previousSource = path.startsWith("hold.") ? snapshot : previous;
+      const cleanPath = path.startsWith("hold.") ? path : path;
+      return renderCompareMetric(label, nestedValue(currentSource, cleanPath), nestedValue(previousSource, cleanPath), type, direction);
+    }).join("");
+
+    return `<section class="compare-block"><h3>KPI Summary</h3><div class="compare-metrics">${cards}</div></section>`;
+  }
+
+  function renderUploadCompare(currentAnalysis, snapshot) {
+    const current = currentAnalysis.uploadSummary || {};
+    const previous = snapshot.uploadSummary || {};
+    const rows = [
+      ["Ads files used", `${numberValue(current.adsFilesUsed)}/${numberValue(current.adsFilesSelected)}`, `${numberValue(previous.adsFilesUsed)}/${numberValue(previous.adsFilesSelected)}`],
+      ["Ads rows used", formatNumber(numberValue(current.adsRowsUsed)), formatNumber(numberValue(previous.adsRowsUsed))],
+      ["Commission files", formatNumber(numberValue(current.commissionFilesSelected)), formatNumber(numberValue(previous.commissionFilesSelected))],
+      ["Commission rows used", formatNumber(numberValue(current.commissionRowsUsed)), formatNumber(numberValue(previous.commissionRowsUsed))],
+      ["Duplicate rows ignored", formatNumber(numberValue(current.duplicateAdsIgnored) + numberValue(current.duplicateCommissionRowsIgnored)), formatNumber(numberValue(previous.duplicateAdsIgnored) + numberValue(previous.duplicateCommissionRowsIgnored))],
+      ["Unknown files", formatNumber(numberValue(current.unknownFiles)), formatNumber(numberValue(previous.unknownFiles))]
+    ];
+
+    return `
+      <section class="compare-block">
+        <h3>Upload Summary</h3>
+        <div class="compare-list">
+          ${rows.map(([label, currentText, previousText]) => (
+            `<div><span>${htmlEscape(label)}</span><strong>${htmlEscape(currentText)}</strong><small>Snapshot ${htmlEscape(previousText)}</small></div>`
+          )).join("")}
+        </div>
+      </section>`;
+  }
+
+  function rowKey(row, keyName) {
+    return String(row && row[keyName] != null ? row[keyName] : "").trim();
+  }
+
+  function compareKeys(currentRows, previousRows, keyFn) {
+    const keys = [];
+    const seen = new Set();
+    currentRows.forEach((row) => {
+      const key = keyFn(row);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      keys.push(key);
+    });
+    previousRows.forEach((row) => {
+      const key = keyFn(row);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      keys.push(key);
+    });
+    return keys;
+  }
+
+  function renderCompareCell(currentRow, previousRow, column) {
+    if (column.render) return column.render(currentRow, previousRow);
+    const current = nestedValue(currentRow || {}, column.path);
+    const previous = nestedValue(previousRow || {}, column.path);
+    return `<div class="compare-cell"><strong>${formatByType(current, column.type)}</strong>${renderDelta(current, previous, column.type, column.direction)}</div>`;
+  }
+
+  function renderDimensionCompare(title, currentRows, previousRows, keyFn, columns, emptyText) {
+    const current = arrayValue(currentRows);
+    const previous = arrayValue(previousRows);
+    if (!current.length && !previous.length) {
+      return `<section class="compare-block"><h3>${htmlEscape(title)}</h3><p class="empty-state">${htmlEscape(emptyText || "Tiada data untuk compare.")}</p></section>`;
+    }
+
+    const currentMap = new Map(current.map((row) => [keyFn(row), row]));
+    const previousMap = new Map(previous.map((row) => [keyFn(row), row]));
+    const keys = compareKeys(current, previous, keyFn);
+    const header = columns.map((column) => `<th class="${column.num ? "num" : ""}">${htmlEscape(column.label)}</th>`).join("");
+    const body = keys.map((key) => {
+      const currentRow = currentMap.get(key);
+      const previousRow = previousMap.get(key);
+      const status = currentRow && previousRow ? "" : currentRow ? "Baru" : "Hilang";
+      const statusBadge = status ? `<span class="compare-status">${htmlEscape(status)}</span>` : "";
+      const cells = columns.map((column) => `<td class="${column.num ? "num" : ""}">${renderCompareCell(currentRow, previousRow, column)}</td>`).join("");
+      return `<tr><td><strong>${htmlEscape(key)}</strong>${statusBadge}</td>${cells}</tr>`;
+    }).join("");
+    const note = !previous.length && current.length ? `<p class="compare-note">Snapshot lama mungkin belum simpan data section ini.</p>` : "";
+
+    return `
+      <section class="compare-block">
+        <h3>${htmlEscape(title)}</h3>
+        ${note}
+        <div class="table-wrap compare-table">
+          <table><thead><tr><th>Key</th>${header}</tr></thead><tbody>${body}</tbody></table>
+        </div>
+      </section>`;
+  }
+
+  function renderAdCompare(currentAnalysis, snapshot) {
+    return renderDimensionCompare(
+      "Ad / Sub_id4 Ranking",
+      arrayValue(currentAnalysis.perAd),
+      arrayValue(snapshot.perAd),
+      (row) => rowKey(row, "adNo"),
+      [
+        {
+          label: "Action",
+          render: (currentRow, previousRow) => `<div class="compare-cell"><strong>${htmlEscape(actionLabel(currentRow && currentRow.action))}</strong><small>Snapshot ${htmlEscape(actionLabel(previousRow && previousRow.action))}</small></div>`
+        },
+        { label: "Spend", path: "spend", type: "money", direction: "neutral", num: true },
+        { label: "Clicks", path: "linkClicks", type: "number", direction: "higher", num: true },
+        { label: "Orders", path: "orders", type: "number", direction: "higher", num: true },
+        { label: "Comm", path: "expectedCommission", type: "money", direction: "higher", num: true },
+        { label: "ROAS", path: "commissionRoas", type: "decimal", direction: "higher", num: true },
+        { label: "ROI", path: "roi", type: "percent", direction: "higher", num: true }
+      ],
+      "Tiada data ad."
+    );
+  }
+
+  function renderGroupCompare(title, currentRows, previousRows, keyName) {
+    return renderDimensionCompare(
+      title,
+      currentRows,
+      previousRows,
+      (row) => rowKey(row, keyName),
+      [
+        { label: "Orders", path: "orders", type: "number", direction: "higher", num: true },
+        { label: "Items", path: "items", type: "number", direction: "higher", num: true },
+        { label: "PV", path: "purchaseValue", type: "money", direction: "higher", num: true },
+        { label: "Comm", path: "expectedCommission", type: "money", direction: "higher", num: true },
+        { label: "Rate", path: "avgCommissionRate", type: "percent", direction: "higher", num: true }
+      ],
+      `Tiada data ${title.toLowerCase()}.`
+    );
+  }
+
+  function renderHoldCompare(currentAnalysis, snapshot) {
+    const currentHold = currentAnalysis.hold || {};
+    const previousHold = snapshot.hold || {};
+    const metrics = [
+      ["Orders With Time", "totalOrders", "number", "higher"],
+      ["Average Hold", "avgMs", "duration", "lower"],
+      ["Median Hold", "medianMs", "duration", "lower"],
+      ["Same-hour Rate", "sameHourRate", "percent", "higher"],
+      ["Same-day Rate", "sameDayRate", "percent", "higher"],
+      ["Delayed Rate", "delayedRate", "percent", "lower"],
+      ["Longest Hold", "longestMs", "duration", "lower"],
+      ["Hold Comm", "totalCommission", "money", "higher"]
+    ];
+    const metricCards = metrics.map(([label, path, type, direction]) => (
+      renderCompareMetric(label, nestedValue(currentHold, path), nestedValue(previousHold, path), type, direction)
+    )).join("");
+
+    return `
+      <section class="compare-block">
+        <h3>Hold Rate / Cookie Delay</h3>
+        <div class="compare-metrics">${metricCards}</div>
+        ${renderDimensionCompare(
+          "Hold Buckets",
+          arrayValue(currentHold.buckets),
+          arrayValue(previousHold.buckets),
+          (row) => rowKey(row, "key"),
+          [
+            { label: "Orders", path: "orders", type: "number", direction: "higher", num: true },
+            { label: "Hold Rate", path: "rate", type: "percent", direction: "higher", num: true },
+            { label: "PV", path: "purchaseValue", type: "money", direction: "higher", num: true },
+            { label: "Comm", path: "expectedCommission", type: "money", direction: "higher", num: true },
+            { label: "Comm Share", path: "commissionShare", type: "percent", direction: "higher", num: true }
+          ],
+          "Tiada data hold bucket."
+        )}
+      </section>`;
+  }
+
+  function renderAudienceCompare(currentAnalysis, snapshot) {
+    return renderDimensionCompare(
+      "Audience",
+      arrayValue(currentAnalysis.audience),
+      arrayValue(snapshot.audience),
+      (row) => `${rowKey(row, "age")} | ${rowKey(row, "gender")}`,
+      [
+        { label: "Spend", path: "spend", type: "money", direction: "neutral", num: true },
+        { label: "Impr.", path: "impressions", type: "number", direction: "higher", num: true },
+        { label: "Clicks", path: "linkClicks", type: "number", direction: "higher", num: true },
+        { label: "CTR", path: "ctr", type: "percent", direction: "higher", num: true },
+        { label: "CPC", path: "cpc", type: "money", direction: "lower", num: true }
+      ],
+      "Tiada data audience."
+    );
+  }
+
+  function renderIssueListForCompare(issues) {
+    const rows = arrayValue(issues);
+    if (!rows.length) return `<p class="empty-state">Tiada isu.</p>`;
+    return rows.map((issue) => (
+      `<div class="compare-issue"><strong>${htmlEscape(issue.title || "-")}</strong><span>${htmlEscape(issue.detail || "")}</span></div>`
+    )).join("");
+  }
+
+  function renderIssueCompare(currentAnalysis, snapshot) {
+    const currentIssues = arrayValue(currentAnalysis.issues);
+    const previousIssues = arrayValue(snapshot.issues);
+    return `
+      <section class="compare-block">
+        <h3>Tracking Issues</h3>
+        <div class="compare-issue-grid">
+          <div>
+            <h4>Current (${formatNumber(currentIssues.length)})</h4>
+            ${renderIssueListForCompare(currentIssues)}
+          </div>
+          <div>
+            <h4>Snapshot (${formatNumber(previousIssues.length)})</h4>
+            ${renderIssueListForCompare(previousIssues)}
+          </div>
+        </div>
+      </section>`;
+  }
+
   function renderCompare(currentAnalysis, snapshotId) {
     const panel = document.getElementById("snapshotComparePanel");
-    if (!snapshotId || !currentAnalysis) {
+    if (!snapshotId) {
       panel.innerHTML = "";
       return;
     }
@@ -1047,21 +1334,24 @@
       panel.innerHTML = "";
       return;
     }
-    const current = currentAnalysis.summary;
-    const previous = snapshot.summary;
-    const deltas = [
-      ["Spend", current.ads.spend - previous.ads.spend, "money"],
-      ["Expected Comm", current.commission.expectedCommission - previous.commission.expectedCommission, "money"],
-      ["Commission ROAS", current.commission.commissionRoas - previous.commission.commissionRoas, "decimal"],
-      ["ROI", current.commission.roi - previous.commission.roi, "percent"]
-    ];
-    panel.innerHTML = `<div class="compare-card"><strong>Compare vs ${htmlEscape(snapshot.name)}</strong>${
-      deltas.map(([label, delta, type]) => {
-        const text = type === "money" ? formatMoney(delta) : type === "percent" ? formatPercent(delta) : formatDecimal(delta);
-        const cls = delta >= 0 ? "profit-text" : "loss-text";
-        return `<div>${htmlEscape(label)}: <span class="${cls}">${text}</span></div>`;
-      }).join("")
-    }</div>`;
+    if (!currentAnalysis) {
+      panel.innerHTML = `<div class="compare-card"><strong>Compare vs ${htmlEscape(snapshot.name)}</strong><p class="empty-state">Upload dan tekan Analisis dahulu untuk compare dengan snapshot ini.</p></div>`;
+      return;
+    }
+
+    panel.innerHTML = `
+      <div class="compare-card">
+        <strong>Compare current analysis vs ${htmlEscape(snapshot.name)}</strong>
+        ${renderKpiCompare(currentAnalysis, snapshot)}
+        ${renderUploadCompare(currentAnalysis, snapshot)}
+        ${renderAdCompare(currentAnalysis, snapshot)}
+        ${renderGroupCompare("Attribution", arrayValue(currentAnalysis.attribution), arrayValue(snapshot.attribution), "key")}
+        ${renderGroupCompare("Category", arrayValue(currentAnalysis.categories), arrayValue(snapshot.categories), "key")}
+        ${renderGroupCompare("Product", arrayValue(currentAnalysis.products), arrayValue(snapshot.products), "key")}
+        ${renderHoldCompare(currentAnalysis, snapshot)}
+        ${renderAudienceCompare(currentAnalysis, snapshot)}
+        ${renderIssueCompare(currentAnalysis, snapshot)}
+      </div>`;
   }
 
   async function readFiles(files) {
