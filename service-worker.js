@@ -1,9 +1,11 @@
-const CACHE_NAME = "shopee-dashboard-v5";
+const CACHE_NAME = "shopee-dashboard-v6";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
+  "./vendor/ffmpeg/ffmpeg.js",
+  "./vendor/ffmpeg/814.ffmpeg.js",
   "./manifest.webmanifest",
   "./icon.svg"
 ];

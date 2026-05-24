@@ -3,6 +3,34 @@
 
   const STORAGE_KEY = "shopeeDashboardSnapshots:v1";
   const CORE_VERSION = "1.0.0";
+  const FFMPEG_VERSION = "0.12.15";
+  const FFMPEG_CORE_VERSION = "0.12.10";
+  const FFMPEG_LOCAL_SCRIPT = "./vendor/ffmpeg/ffmpeg.js";
+  const FFMPEG_BASE_URL = `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/umd`;
+  const VIDEO_SIZE_WARNING_BYTES = 100 * 1024 * 1024;
+  const VIDEO_DURATION_WARNING_SECONDS = 180;
+  const QUALITY_PRESETS = {
+    balanced: { label: "Balanced", crf: "23" },
+    small: { label: "Smaller file", crf: "28" },
+    high: { label: "Higher quality", crf: "20" }
+  };
+  const videoState = {
+    file: null,
+    previewUrl: "",
+    outputUrl: "",
+    inputName: "",
+    outputName: "",
+    outputSize: 0,
+    metadata: {
+      duration: 0,
+      width: 0,
+      height: 0
+    },
+    ffmpeg: null,
+    ffmpegScript: null,
+    loadingEngine: null,
+    converting: false
+  };
 
   const ADS_COLUMNS = ["Ad name", "Amount spent (MYR)", "Link clicks"];
   const COMMISSION_COLUMNS = ["Order id", "Affiliate Net Commission(RM)", "Sub_id4"];
@@ -809,6 +837,68 @@
     return `${minutes} min`;
   }
 
+  function formatVideoDuration(seconds) {
+    const totalSeconds = Math.max(0, Math.round(Number.isFinite(seconds) ? seconds : 0));
+    const minutes = Math.floor(totalSeconds / 60);
+    const secs = totalSeconds % 60;
+    if (minutes >= 60) {
+      const hours = Math.floor(minutes / 60);
+      const mins = minutes % 60;
+      return `${hours}j ${mins}m ${secs}s`;
+    }
+    return `${minutes}m ${secs}s`;
+  }
+
+  function formatBytes(bytes) {
+    const value = Number.isFinite(bytes) ? bytes : 0;
+    if (value >= 1024 * 1024 * 1024) return `${formatDecimal(value / (1024 * 1024 * 1024))} GB`;
+    if (value >= 1024 * 1024) return `${formatDecimal(value / (1024 * 1024))} MB`;
+    if (value >= 1024) return `${formatDecimal(value / 1024)} KB`;
+    return `${formatNumber(value)} B`;
+  }
+
+  function safeFileExtension(file) {
+    const match = String(file && file.name ? file.name : "").toLowerCase().match(/\.([a-z0-9]{2,5})$/);
+    return match ? match[1].replace(/[^a-z0-9]/g, "") : "mp4";
+  }
+
+  function aspectRatioText(width, height) {
+    if (!width || !height) return "-";
+    const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+    const divisor = gcd(width, height);
+    return `${width / divisor}:${height / divisor}`;
+  }
+
+  function loadScriptOnce(src) {
+    if (videoState.ffmpegScript) return videoState.ffmpegScript;
+    videoState.ffmpegScript = new Promise((resolve, reject) => {
+      const existing = document.querySelector(`script[data-dynamic-src="${src}"]`);
+      if (existing) {
+        resolve();
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = src;
+      script.async = true;
+      script.dataset.dynamicSrc = src;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error(`Gagal load ${src}`));
+      document.head.appendChild(script);
+    });
+    return videoState.ffmpegScript;
+  }
+
+  async function readBlobAsBytes(blob) {
+    return new Uint8Array(await blob.arrayBuffer());
+  }
+
+  async function toBlobUrl(url, mimeType) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Gagal download ${url}`);
+    const blob = new Blob([await response.arrayBuffer()], { type: mimeType });
+    return URL.createObjectURL(blob);
+  }
+
   function htmlEscape(value) {
     return String(value == null ? "" : value)
       .replace(/&/g, "&amp;")
@@ -1372,6 +1462,305 @@
     list.innerHTML = [...files].map((file) => `<span class="file-pill">${htmlEscape(file.name)}</span>`).join("");
   }
 
+  function setActivePage(page) {
+    const isVideo = page === "video";
+    document.body.dataset.page = isVideo ? "video" : "performance";
+    document.getElementById("performancePage").hidden = isVideo;
+    document.getElementById("videoPage").hidden = !isVideo;
+    document.getElementById("performanceActions").hidden = isVideo;
+    document.getElementById("appTitle").textContent = isVideo ? "Video Converter" : "Performance Dashboard";
+    document.getElementById("pageEyebrow").textContent = isVideo ? "Browser Video Tool" : "Shopee Affiliate Cookies";
+    document.querySelectorAll("[data-page-target]").forEach((button) => {
+      button.classList.toggle("active", button.dataset.pageTarget === (isVideo ? "video" : "performance"));
+    });
+  }
+
+  function setVideoStatus(tone, message) {
+    const panel = document.getElementById("videoStatus");
+    panel.className = `status-panel ${tone || "muted"}`;
+    panel.querySelector("span").textContent = message;
+  }
+
+  function setVideoProgress(value, message) {
+    const percent = Math.max(0, Math.min(100, Math.round((Number.isFinite(value) ? value : 0) * 100)));
+    document.getElementById("videoProgressFill").style.width = `${percent}%`;
+    document.getElementById("videoProgressText").textContent = `${percent}%`;
+    if (message) setVideoStatus("watch", message);
+  }
+
+  function appendVideoLog(message) {
+    const log = document.getElementById("videoLog");
+    const clean = String(message || "").trim();
+    if (!clean) return;
+    const current = log.textContent === "Belum ada proses." ? "" : log.textContent;
+    log.textContent = `${current}${current ? "\n" : ""}${clean}`.split("\n").slice(-60).join("\n");
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function clearVideoOutput() {
+    if (videoState.outputUrl) URL.revokeObjectURL(videoState.outputUrl);
+    videoState.outputUrl = "";
+    videoState.outputSize = 0;
+    const link = document.getElementById("downloadVideoLink");
+    link.href = "#";
+    link.download = "converted-video.mp4";
+    link.classList.add("disabled");
+    link.setAttribute("aria-disabled", "true");
+    document.getElementById("videoOutputSummary").className = "upload-summary";
+    document.getElementById("videoOutputSummary").innerHTML = "";
+  }
+
+  async function deleteVirtualVideoFiles() {
+    if (!videoState.ffmpeg) return;
+    const names = [videoState.inputName, videoState.outputName].filter(Boolean);
+    for (const name of names) {
+      try {
+        await videoState.ffmpeg.deleteFile(name);
+      } catch (_error) {
+        // File may already be gone after a reset or failed conversion.
+      }
+    }
+    videoState.inputName = "";
+    videoState.outputName = "";
+  }
+
+  function renderVideoWarning() {
+    const warning = document.getElementById("videoWarning");
+    const messages = [];
+    if (videoState.file && videoState.file.size > VIDEO_SIZE_WARNING_BYTES) {
+      messages.push(`File lebih ${formatBytes(VIDEO_SIZE_WARNING_BYTES)}; conversion mungkin lambat terutama di phone.`);
+    }
+    if (videoState.metadata.duration > VIDEO_DURATION_WARNING_SECONDS) {
+      messages.push(`Video lebih ${formatVideoDuration(VIDEO_DURATION_WARNING_SECONDS)}; browser mungkin berat.`);
+    }
+    if (!messages.length) {
+      warning.hidden = true;
+      warning.innerHTML = "";
+      return;
+    }
+    warning.hidden = false;
+    warning.innerHTML = `<strong>Soft warning</strong><span>${htmlEscape(messages.join(" "))}</span>`;
+  }
+
+  function renderVideoMetadata() {
+    const file = videoState.file;
+    document.getElementById("videoMetaName").textContent = file ? file.name : "-";
+    document.getElementById("videoMetaType").textContent = file ? file.type || "Unknown type" : "-";
+    document.getElementById("videoMetaSize").textContent = file ? formatBytes(file.size) : "-";
+    document.getElementById("videoMetaDuration").textContent = videoState.metadata.duration ? formatVideoDuration(videoState.metadata.duration) : "-";
+    document.getElementById("videoMetaDurationNote").textContent = videoState.metadata.duration ? "Detected dari preview" : "-";
+    document.getElementById("videoMetaResolution").textContent = videoState.metadata.width ? `${videoState.metadata.width} x ${videoState.metadata.height}` : "-";
+    document.getElementById("videoMetaRatio").textContent = aspectRatioText(videoState.metadata.width, videoState.metadata.height);
+    renderVideoWarning();
+  }
+
+  function resetVideoDom() {
+    document.getElementById("videoFileInput").value = "";
+    document.getElementById("videoFileName").innerHTML = "";
+    const preview = document.getElementById("inputVideoPreview");
+    preview.removeAttribute("src");
+    preview.hidden = true;
+    preview.load();
+    document.getElementById("videoWarning").hidden = true;
+    document.getElementById("videoWarning").innerHTML = "";
+    document.getElementById("videoLog").textContent = "Belum ada proses.";
+    document.getElementById("convertVideoBtn").disabled = true;
+    setVideoProgress(0);
+    setVideoStatus("muted", "Pilih video untuk mula.");
+    renderVideoMetadata();
+  }
+
+  async function resetVideoWorkspace() {
+    await deleteVirtualVideoFiles();
+    clearVideoOutput();
+    if (videoState.previewUrl) URL.revokeObjectURL(videoState.previewUrl);
+    videoState.file = null;
+    videoState.previewUrl = "";
+    videoState.metadata = { duration: 0, width: 0, height: 0 };
+    videoState.converting = false;
+    resetVideoDom();
+  }
+
+  function updateOutputSummary(targetHeight, preset) {
+    const summary = document.getElementById("videoOutputSummary");
+    summary.className = "upload-summary active";
+    const stats = [
+      ["Output", "MP4", `${targetHeight}p`],
+      ["Quality", QUALITY_PRESETS[preset].label, `CRF ${QUALITY_PRESETS[preset].crf}`],
+      ["Output Size", formatBytes(videoState.outputSize), "Siap untuk download"],
+      ["Privacy", "Local", "Tidak disimpan"]
+    ];
+    summary.innerHTML = stats.map(([label, value, note]) => (
+      `<div class="upload-stat"><span>${htmlEscape(label)}</span><strong>${htmlEscape(value)}</strong><small>${htmlEscape(note)}</small></div>`
+    )).join("");
+  }
+
+  function loadVideoFile(file) {
+    clearVideoOutput();
+    if (videoState.previewUrl) URL.revokeObjectURL(videoState.previewUrl);
+    videoState.file = file;
+    videoState.metadata = { duration: 0, width: 0, height: 0 };
+    videoState.previewUrl = URL.createObjectURL(file);
+
+    document.getElementById("videoFileName").innerHTML = `<span class="file-pill">${htmlEscape(file.name)}</span>`;
+    const preview = document.getElementById("inputVideoPreview");
+    preview.src = videoState.previewUrl;
+    preview.hidden = false;
+    preview.onloadedmetadata = () => {
+      videoState.metadata = {
+        duration: preview.duration || 0,
+        width: preview.videoWidth || 0,
+        height: preview.videoHeight || 0
+      };
+      renderVideoMetadata();
+    };
+    document.getElementById("convertVideoBtn").disabled = false;
+    document.getElementById("videoLog").textContent = "Video loaded. Sedia convert.";
+    setVideoProgress(0);
+    setVideoStatus("muted", "Video dipilih. Pilih setting dan tekan Convert.");
+    renderVideoMetadata();
+  }
+
+  async function ensureFfmpegEngine() {
+    if (videoState.ffmpeg) return videoState;
+    if (videoState.loadingEngine) return videoState.loadingEngine;
+
+    videoState.loadingEngine = (async () => {
+      try {
+        setVideoProgress(0.05, "Loading FFmpeg engine untuk first-time use...");
+        appendVideoLog(`Loading ffmpeg.wasm ${FFMPEG_VERSION} wrapper...`);
+        await loadScriptOnce(FFMPEG_LOCAL_SCRIPT);
+        const FFmpegClass = window.FFmpegWASM && window.FFmpegWASM.FFmpeg;
+        if (!FFmpegClass) throw new Error("FFmpeg wrapper tidak tersedia.");
+        appendVideoLog("Loading ffmpeg.wasm core...");
+        const [coreURL, wasmURL] = await Promise.all([
+          toBlobUrl(`${FFMPEG_BASE_URL}/ffmpeg-core.js`, "text/javascript"),
+          toBlobUrl(`${FFMPEG_BASE_URL}/ffmpeg-core.wasm`, "application/wasm")
+        ]);
+        const ffmpeg = new FFmpegClass();
+        ffmpeg.on("log", ({ message }) => appendVideoLog(message));
+        ffmpeg.on("progress", ({ progress }) => {
+          if (videoState.converting) setVideoProgress(Math.max(0.08, Math.min(0.98, progress || 0)), "Converting video...");
+        });
+        await ffmpeg.load({
+          coreURL,
+          wasmURL
+        });
+        videoState.ffmpeg = ffmpeg;
+        appendVideoLog("FFmpeg engine ready.");
+        return videoState;
+      } catch (error) {
+        videoState.loadingEngine = null;
+        throw new Error(`FFmpeg engine belum boleh dimuat. Semak internet untuk first-time load, kemudian cuba lagi. ${error.message || error}`);
+      }
+    })();
+    return videoState.loadingEngine;
+  }
+
+  function currentTargetHeight() {
+    const checked = document.querySelector("input[name='targetHeight']:checked");
+    return checked ? checked.value : "720";
+  }
+
+  function currentQualityPreset() {
+    const value = document.getElementById("qualityPreset").value;
+    return QUALITY_PRESETS[value] ? value : "balanced";
+  }
+
+  async function convertVideo() {
+    if (!videoState.file || videoState.converting) return;
+    const targetHeight = currentTargetHeight();
+    const preset = currentQualityPreset();
+    const quality = QUALITY_PRESETS[preset];
+    const inputName = `input.${safeFileExtension(videoState.file)}`;
+    const outputName = `output-${targetHeight}p.mp4`;
+
+    videoState.converting = true;
+    document.getElementById("convertVideoBtn").disabled = true;
+    clearVideoOutput();
+    await deleteVirtualVideoFiles();
+    videoState.inputName = inputName;
+    videoState.outputName = outputName;
+    document.getElementById("videoLog").textContent = "Preparing conversion...";
+    setVideoProgress(0.03, "Preparing video...");
+
+    try {
+      const engine = await ensureFfmpegEngine();
+      appendVideoLog(`Writing ${inputName} to memory...`);
+      await engine.ffmpeg.writeFile(inputName, await readBlobAsBytes(videoState.file));
+      const args = [
+        "-i", inputName,
+        "-map", "0:v:0",
+        "-map", "0:a?",
+        "-vf", `scale=-2:${targetHeight}:flags=lanczos`,
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", quality.crf,
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-movflags", "+faststart",
+        "-sn",
+        outputName
+      ];
+      appendVideoLog(`Command: ffmpeg ${args.join(" ")}`);
+      const code = await engine.ffmpeg.exec(args);
+      if (code !== 0) throw new Error(`FFmpeg exit code ${code}`);
+      const data = await engine.ffmpeg.readFile(outputName);
+      const blob = new Blob([data.buffer], { type: "video/mp4" });
+      videoState.outputSize = blob.size;
+      videoState.outputUrl = URL.createObjectURL(blob);
+      const link = document.getElementById("downloadVideoLink");
+      link.href = videoState.outputUrl;
+      link.download = `${videoState.file.name.replace(/\.[^.]+$/, "")}-${targetHeight}p.mp4`;
+      link.classList.remove("disabled");
+      link.setAttribute("aria-disabled", "false");
+      updateOutputSummary(targetHeight, preset);
+      setVideoProgress(1, "Conversion siap. Download MP4 tersedia.");
+      setVideoStatus("profit", "Conversion siap. Download MP4, kemudian workspace akan reset.");
+    } catch (error) {
+      clearVideoOutput();
+      await deleteVirtualVideoFiles();
+      appendVideoLog(`Error: ${error.message || error}`);
+      setVideoStatus("loss", error.message || "Conversion gagal.");
+      setVideoProgress(0);
+    } finally {
+      videoState.converting = false;
+      document.getElementById("convertVideoBtn").disabled = !videoState.file;
+    }
+  }
+
+  function initVideoConverter() {
+    const input = document.getElementById("videoFileInput");
+    const convertBtn = document.getElementById("convertVideoBtn");
+    const resetBtn = document.getElementById("resetVideoBtn");
+    const downloadLink = document.getElementById("downloadVideoLink");
+
+    input.addEventListener("change", () => {
+      const file = input.files && input.files[0];
+      if (!file) {
+        resetVideoWorkspace();
+        return;
+      }
+      if (!file.type.startsWith("video/")) {
+        setVideoStatus("loss", "Fail ini bukan video yang browser boleh baca.");
+        input.value = "";
+        return;
+      }
+      loadVideoFile(file);
+    });
+
+    convertBtn.addEventListener("click", convertVideo);
+    resetBtn.addEventListener("click", () => resetVideoWorkspace());
+    downloadLink.addEventListener("click", (event) => {
+      if (!videoState.outputUrl) {
+        event.preventDefault();
+        return;
+      }
+      setTimeout(() => resetVideoWorkspace(), 900);
+    });
+  }
+
   function initDashboard() {
     let currentAnalysis = null;
     const fileInput = document.getElementById("fileInput");
@@ -1380,8 +1769,13 @@
     const clearBtn = document.getElementById("clearBtn");
     const compareSelect = document.getElementById("snapshotCompare");
 
+    document.querySelectorAll("[data-page-target]").forEach((button) => {
+      button.addEventListener("click", () => setActivePage(button.dataset.pageTarget));
+    });
+    initVideoConverter();
     renderSnapshots(null);
     clearCurrentAnalysisUi();
+    renderVideoMetadata();
 
     fileInput.addEventListener("change", () => updateFileList(fileInput.files || []));
 

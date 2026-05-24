@@ -9,133 +9,243 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="stylesheet" href="./styles.css">
   </head>
-  <body>
-    <header class="app-header">
-      <div>
-        <p class="eyebrow">Shopee Affiliate Cookies</p>
-        <h1>Performance Dashboard</h1>
-      </div>
-      <div class="header-actions">
-        <button id="saveSnapshotBtn" class="btn secondary" type="button" disabled>Simpan Snapshot</button>
-        <button id="clearBtn" class="btn ghost" type="button">Reset</button>
-      </div>
-    </header>
-
-    <main>
-      <section class="upload-band" aria-labelledby="upload-title">
-        <div class="upload-copy">
-          <h2 id="upload-title">Upload CSV</h2>
-          <p>Ads report + Affiliate Commission report. Multi-file upload disokong.</p>
+  <body data-page="performance">
+    <div class="app-shell">
+      <aside class="app-sidebar" aria-label="Dashboard navigation">
+        <div class="sidebar-brand">
+          <span>Shopee Tools</span>
+          <strong>Affiliate Ops</strong>
         </div>
-        <div class="upload-controls">
-          <label class="file-picker" for="fileInput">
-            <span>Pilih CSV</span>
-            <input id="fileInput" type="file" accept=".csv,text/csv" multiple>
-          </label>
-          <button id="analyzeBtn" class="btn primary" type="button">Analisis</button>
-        </div>
-        <div id="fileList" class="file-list" aria-live="polite"></div>
-        <div id="uploadSummary" class="upload-summary" aria-live="polite"></div>
-      </section>
+        <nav class="sidebar-nav">
+          <button class="nav-btn active" type="button" data-page-target="performance">Performance</button>
+          <button class="nav-btn" type="button" data-page-target="video">Video Converter</button>
+        </nav>
+      </aside>
 
-      <section id="statusPanel" class="status-panel muted">
-        <strong>Status</strong>
-        <span id="statusMessage">Belum ada data dianalisis.</span>
-      </section>
-
-      <section class="kpi-grid" aria-label="KPI utama">
-        <article class="kpi-card">
-          <span>Spend Ads</span>
-          <strong id="kpiSpend">-</strong>
-          <small id="kpiTraffic">-</small>
-        </article>
-        <article class="kpi-card">
-          <span>Expected Commission</span>
-          <strong id="kpiExpected">-</strong>
-          <small id="kpiCompleted">-</small>
-        </article>
-        <article class="kpi-card">
-          <span>Commission ROAS</span>
-          <strong id="kpiRoas">-</strong>
-          <small id="kpiRoi">-</small>
-        </article>
-        <article class="kpi-card">
-          <span>Break-even GMV ROAS</span>
-          <strong id="kpiBeRoas">-</strong>
-          <small id="kpiRate">-</small>
-        </article>
-      </section>
-
-      <section class="content-section" aria-labelledby="summary-title">
-        <div class="section-heading">
-          <h2 id="summary-title">Executive Summary</h2>
-          <p id="summaryLine">Upload CSV untuk mula.</p>
-        </div>
-        <div id="summaryGrid" class="metric-grid"></div>
-      </section>
-
-      <section class="content-section" aria-labelledby="ad-title">
-        <div class="section-heading">
-          <h2 id="ad-title">Ad / Sub_id4 Ranking</h2>
-          <p id="adSubtitle">Ranking ikut Commission ROAS dan komisyen.</p>
-        </div>
-        <div id="adTable" class="table-wrap"></div>
-      </section>
-
-      <section class="split-section">
-        <section class="content-section" aria-labelledby="attrib-title">
-          <div class="section-heading">
-            <h2 id="attrib-title">Attribution</h2>
-          </div>
-          <div id="attributionTable" class="table-wrap"></div>
-        </section>
-        <section class="content-section" aria-labelledby="category-title">
-          <div class="section-heading">
-            <h2 id="category-title">Category</h2>
-          </div>
-          <div id="categoryTable" class="table-wrap"></div>
-        </section>
-      </section>
-
-      <section class="content-section" aria-labelledby="hold-title">
-        <div class="section-heading">
+      <div class="app-frame">
+        <header class="app-header">
           <div>
-            <h2 id="hold-title">Hold Rate / Cookie Delay</h2>
-            <p id="holdSubtitle">Masa dari Click Time sampai Order Time.</p>
+            <p id="pageEyebrow" class="eyebrow">Shopee Affiliate Cookies</p>
+            <h1 id="appTitle">Performance Dashboard</h1>
           </div>
-        </div>
-        <div id="holdSummary" class="metric-grid"></div>
-        <div id="holdTable" class="table-wrap hold-table"></div>
-      </section>
+          <div id="performanceActions" class="header-actions">
+            <button id="saveSnapshotBtn" class="btn secondary" type="button" disabled>Simpan Snapshot</button>
+            <button id="clearBtn" class="btn ghost" type="button">Reset</button>
+          </div>
+        </header>
 
-      <section class="content-section" aria-labelledby="audience-title">
-        <div class="section-heading">
-          <h2 id="audience-title">Audience</h2>
-          <p>Age/gender dari Ads report.</p>
-        </div>
-        <div id="audienceTable" class="table-wrap"></div>
-      </section>
+        <main>
+          <section id="performancePage" class="page-view active" aria-label="Performance dashboard">
+            <section class="upload-band" aria-labelledby="upload-title">
+              <div class="upload-copy">
+                <h2 id="upload-title">Upload CSV</h2>
+                <p>Ads report + Affiliate Commission report. Multi-file upload disokong.</p>
+              </div>
+              <div class="upload-controls">
+                <label class="file-picker" for="fileInput">
+                  <span>Pilih CSV</span>
+                  <input id="fileInput" type="file" accept=".csv,text/csv" multiple>
+                </label>
+                <button id="analyzeBtn" class="btn primary" type="button">Analisis</button>
+              </div>
+              <div id="fileList" class="file-list" aria-live="polite"></div>
+              <div id="uploadSummary" class="upload-summary" aria-live="polite"></div>
+            </section>
 
-      <section class="content-section" aria-labelledby="issues-title">
-        <div class="section-heading">
-          <h2 id="issues-title">Tracking Issues</h2>
-        </div>
-        <div id="issuesList" class="issues-list"></div>
-      </section>
+            <section id="statusPanel" class="status-panel muted">
+              <strong>Status</strong>
+              <span id="statusMessage">Belum ada data dianalisis.</span>
+            </section>
 
-      <section class="content-section" aria-labelledby="snapshot-title">
-        <div class="section-heading">
-          <h2 id="snapshot-title">Snapshot History</h2>
-          <p>History disimpan di browser device ini.</p>
-        </div>
-        <div class="snapshot-toolbar">
-          <input id="snapshotName" class="text-input" type="text" placeholder="Nama snapshot">
-          <select id="snapshotCompare" class="text-input" aria-label="Compare snapshot dengan current analysis"></select>
-        </div>
-        <div id="snapshotComparePanel" class="compare-panel"></div>
-        <div id="snapshotList" class="snapshot-list"></div>
-      </section>
-    </main>
+            <section class="kpi-grid" aria-label="KPI utama">
+              <article class="kpi-card">
+                <span>Spend Ads</span>
+                <strong id="kpiSpend">-</strong>
+                <small id="kpiTraffic">-</small>
+              </article>
+              <article class="kpi-card">
+                <span>Expected Commission</span>
+                <strong id="kpiExpected">-</strong>
+                <small id="kpiCompleted">-</small>
+              </article>
+              <article class="kpi-card">
+                <span>Commission ROAS</span>
+                <strong id="kpiRoas">-</strong>
+                <small id="kpiRoi">-</small>
+              </article>
+              <article class="kpi-card">
+                <span>Break-even GMV ROAS</span>
+                <strong id="kpiBeRoas">-</strong>
+                <small id="kpiRate">-</small>
+              </article>
+            </section>
+
+            <section class="content-section" aria-labelledby="summary-title">
+              <div class="section-heading">
+                <h2 id="summary-title">Executive Summary</h2>
+                <p id="summaryLine">Upload CSV untuk mula.</p>
+              </div>
+              <div id="summaryGrid" class="metric-grid"></div>
+            </section>
+
+            <section class="content-section" aria-labelledby="ad-title">
+              <div class="section-heading">
+                <h2 id="ad-title">Ad / Sub_id4 Ranking</h2>
+                <p id="adSubtitle">Ranking ikut Commission ROAS dan komisyen.</p>
+              </div>
+              <div id="adTable" class="table-wrap"></div>
+            </section>
+
+            <section class="split-section">
+              <section class="content-section" aria-labelledby="attrib-title">
+                <div class="section-heading">
+                  <h2 id="attrib-title">Attribution</h2>
+                </div>
+                <div id="attributionTable" class="table-wrap"></div>
+              </section>
+              <section class="content-section" aria-labelledby="category-title">
+                <div class="section-heading">
+                  <h2 id="category-title">Category</h2>
+                </div>
+                <div id="categoryTable" class="table-wrap"></div>
+              </section>
+            </section>
+
+            <section class="content-section" aria-labelledby="hold-title">
+              <div class="section-heading">
+                <div>
+                  <h2 id="hold-title">Hold Rate / Cookie Delay</h2>
+                  <p id="holdSubtitle">Masa dari Click Time sampai Order Time.</p>
+                </div>
+              </div>
+              <div id="holdSummary" class="metric-grid"></div>
+              <div id="holdTable" class="table-wrap hold-table"></div>
+            </section>
+
+            <section class="content-section" aria-labelledby="audience-title">
+              <div class="section-heading">
+                <h2 id="audience-title">Audience</h2>
+                <p>Age/gender dari Ads report.</p>
+              </div>
+              <div id="audienceTable" class="table-wrap"></div>
+            </section>
+
+            <section class="content-section" aria-labelledby="issues-title">
+              <div class="section-heading">
+                <h2 id="issues-title">Tracking Issues</h2>
+              </div>
+              <div id="issuesList" class="issues-list"></div>
+            </section>
+
+            <section class="content-section" aria-labelledby="snapshot-title">
+              <div class="section-heading">
+                <h2 id="snapshot-title">Snapshot History</h2>
+                <p>History disimpan di browser device ini.</p>
+              </div>
+              <div class="snapshot-toolbar">
+                <input id="snapshotName" class="text-input" type="text" placeholder="Nama snapshot">
+                <select id="snapshotCompare" class="text-input" aria-label="Compare snapshot dengan current analysis"></select>
+              </div>
+              <div id="snapshotComparePanel" class="compare-panel"></div>
+              <div id="snapshotList" class="snapshot-list"></div>
+            </section>
+          </section>
+
+          <section id="videoPage" class="page-view" aria-labelledby="video-title" hidden>
+            <section class="content-section video-intro">
+              <div class="section-heading">
+                <div>
+                  <h2 id="video-title">Video Converter</h2>
+                  <p>Convert video ke MP4 720p atau 1080p terus dalam browser.</p>
+                </div>
+              </div>
+              <div id="videoStatus" class="status-panel muted">
+                <strong>Status</strong>
+                <span>Pilih video untuk mula.</span>
+              </div>
+            </section>
+
+            <section class="converter-layout">
+              <section class="content-section converter-panel" aria-labelledby="video-upload-title">
+                <div class="section-heading">
+                  <h2 id="video-upload-title">Input Video</h2>
+                </div>
+                <label class="file-picker video-picker" for="videoFileInput">
+                  <span>Pilih Video</span>
+                  <input id="videoFileInput" type="file" accept="video/*">
+                </label>
+                <div id="videoFileName" class="file-list" aria-live="polite"></div>
+                <div id="videoWarning" class="issue-item warning video-warning" hidden></div>
+                <video id="inputVideoPreview" class="video-preview" controls playsinline hidden></video>
+                <div class="metric-grid video-meta-grid">
+                  <article class="metric-card">
+                    <span>File</span>
+                    <strong id="videoMetaName">-</strong>
+                    <small id="videoMetaType">-</small>
+                  </article>
+                  <article class="metric-card">
+                    <span>Size</span>
+                    <strong id="videoMetaSize">-</strong>
+                    <small>Browser memory sahaja</small>
+                  </article>
+                  <article class="metric-card">
+                    <span>Duration</span>
+                    <strong id="videoMetaDuration">-</strong>
+                    <small id="videoMetaDurationNote">-</small>
+                  </article>
+                  <article class="metric-card">
+                    <span>Resolution</span>
+                    <strong id="videoMetaResolution">-</strong>
+                    <small id="videoMetaRatio">-</small>
+                  </article>
+                </div>
+              </section>
+
+              <section class="content-section converter-panel" aria-labelledby="video-settings-title">
+                <div class="section-heading">
+                  <h2 id="video-settings-title">Output Settings</h2>
+                </div>
+                <div class="control-group">
+                  <span class="control-label">Resolution</span>
+                  <div class="segmented-control" role="radiogroup" aria-label="Output resolution">
+                    <label>
+                      <input type="radio" name="targetHeight" value="720" checked>
+                      <span>720p</span>
+                    </label>
+                    <label>
+                      <input type="radio" name="targetHeight" value="1080">
+                      <span>1080p</span>
+                    </label>
+                  </div>
+                </div>
+                <label class="control-group" for="qualityPreset">
+                  <span class="control-label">Quality</span>
+                  <select id="qualityPreset" class="text-input">
+                    <option value="balanced" selected>Balanced</option>
+                    <option value="small">Smaller file</option>
+                    <option value="high">Higher quality</option>
+                  </select>
+                </label>
+                <div class="converter-actions">
+                  <button id="convertVideoBtn" class="btn primary" type="button" disabled>Convert</button>
+                  <a id="downloadVideoLink" class="btn secondary disabled" href="#" download="converted-video.mp4" aria-disabled="true">Download MP4</a>
+                  <button id="resetVideoBtn" class="btn ghost" type="button">Reset Video</button>
+                </div>
+                <div class="progress-wrap" aria-live="polite">
+                  <div class="progress-track"><div id="videoProgressFill" class="progress-fill"></div></div>
+                  <span id="videoProgressText">0%</span>
+                </div>
+                <div id="videoOutputSummary" class="upload-summary" aria-live="polite"></div>
+                <div class="video-log-wrap">
+                  <strong>Process Log</strong>
+                  <div id="videoLog" class="video-log">Belum ada proses.</div>
+                </div>
+              </section>
+            </section>
+          </section>
+        </main>
+      </div>
+    </div>
 
     <script src="./app.js"></script>
   </body>
