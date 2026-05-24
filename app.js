@@ -1524,6 +1524,82 @@
     videoState.outputName = "";
   }
 
+  function videoOrientation(width, height) {
+    if (!width || !height) return "vertical";
+    if (height > width) return "vertical";
+    if (width > height) return "landscape";
+    return "square";
+  }
+
+  function videoFilterForTarget(targetHeight) {
+    const target = Number.parseInt(targetHeight, 10) || 720;
+    const orientation = videoOrientation(videoState.metadata.width, videoState.metadata.height);
+    const longSide = Math.round(target * 16 / 9);
+    if (orientation === "vertical") {
+      return `scale=${target}:${longSide}:force_original_aspect_ratio=increase:flags=lanczos,crop=${target}:${longSide},setsar=1`;
+    }
+    if (orientation === "landscape") {
+      return `scale=${longSide}:${target}:force_original_aspect_ratio=increase:flags=lanczos,crop=${longSide}:${target},setsar=1`;
+    }
+    return `scale=${target}:${target}:flags=lanczos,setsar=1`;
+  }
+
+  function shopeeSafeCheck(width, height, targetHeight) {
+    const target = Number.parseInt(targetHeight, 10) || 720;
+    const longSide = Math.round(target * 16 / 9);
+    const orientation = videoOrientation(width, height);
+    let pass = false;
+    let required = `${target} x ${longSide}`;
+
+    if (orientation === "vertical") {
+      pass = width >= target && height >= longSide;
+      required = `${target} x ${longSide}`;
+    } else if (orientation === "landscape") {
+      pass = width >= longSide && height >= target;
+      required = `${longSide} x ${target}`;
+    } else {
+      pass = width >= target && height >= target;
+      required = `${target} x ${target}`;
+    }
+
+    return {
+      pass,
+      orientation,
+      required,
+      label: pass ? "Pass" : "Warning",
+      note: pass ? "Shopee-safe resolution" : `Perlu minimum ${required}`
+    };
+  }
+
+  async function readVideoMetadataFromUrl(url) {
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.muted = true;
+    video.playsInline = true;
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        video.onloadedmetadata = null;
+        video.onerror = null;
+        video.removeAttribute("src");
+        video.load();
+      };
+      video.onloadedmetadata = () => {
+        const metadata = {
+          width: video.videoWidth || 0,
+          height: video.videoHeight || 0,
+          duration: Number.isFinite(video.duration) ? video.duration : 0
+        };
+        cleanup();
+        resolve(metadata);
+      };
+      video.onerror = () => {
+        cleanup();
+        reject(new Error("Gagal baca metadata output video."));
+      };
+      video.src = url;
+    });
+  }
+
   function renderVideoWarning() {
     const warning = document.getElementById("videoWarning");
     const messages = [];
@@ -1581,17 +1657,22 @@
     resetVideoDom();
   }
 
-  function updateOutputSummary(targetHeight, preset) {
+  function updateOutputSummary(targetHeight, preset, outputMetadata) {
     const summary = document.getElementById("videoOutputSummary");
     summary.className = "upload-summary active";
+    const width = outputMetadata && outputMetadata.width ? outputMetadata.width : 0;
+    const height = outputMetadata && outputMetadata.height ? outputMetadata.height : 0;
+    const safe = shopeeSafeCheck(width, height, targetHeight);
+    const safeClass = safe.pass ? "profit-text" : "watch-text";
     const stats = [
       ["Output", "MP4", `${targetHeight}p`],
+      ["Resolution", width && height ? `${width} x ${height}` : "-", safe.orientation],
+      ["Shopee Safe Check", safe.label, safe.note],
       ["Quality", QUALITY_PRESETS[preset].label, `CRF ${QUALITY_PRESETS[preset].crf}`],
-      ["Output Size", formatBytes(videoState.outputSize), "Siap untuk download"],
-      ["Privacy", "Local", "Tidak disimpan"]
+      ["Output Size", formatBytes(videoState.outputSize), "Siap untuk download"]
     ];
     summary.innerHTML = stats.map(([label, value, note]) => (
-      `<div class="upload-stat"><span>${htmlEscape(label)}</span><strong>${htmlEscape(value)}</strong><small>${htmlEscape(note)}</small></div>`
+      `<div class="upload-stat"><span>${htmlEscape(label)}</span><strong class="${label === "Shopee Safe Check" ? safeClass : ""}">${htmlEscape(value)}</strong><small>${htmlEscape(note)}</small></div>`
     )).join("");
   }
 
@@ -1672,6 +1753,7 @@
     const targetHeight = currentTargetHeight();
     const preset = currentQualityPreset();
     const quality = QUALITY_PRESETS[preset];
+    const videoFilter = videoFilterForTarget(targetHeight);
     const inputName = `input.${safeFileExtension(videoState.file)}`;
     const outputName = `output-${targetHeight}p.mp4`;
 
@@ -1692,7 +1774,7 @@
         "-i", inputName,
         "-map", "0:v:0",
         "-map", "0:a?",
-        "-vf", `scale=-2:${targetHeight}:flags=lanczos`,
+        "-vf", videoFilter,
         "-c:v", "libx264",
         "-preset", "veryfast",
         "-crf", quality.crf,
@@ -1710,14 +1792,16 @@
       const blob = new Blob([data.buffer], { type: "video/mp4" });
       videoState.outputSize = blob.size;
       videoState.outputUrl = URL.createObjectURL(blob);
+      const outputMetadata = await readVideoMetadataFromUrl(videoState.outputUrl);
+      const safe = shopeeSafeCheck(outputMetadata.width, outputMetadata.height, targetHeight);
       const link = document.getElementById("downloadVideoLink");
       link.href = videoState.outputUrl;
-      link.download = `${videoState.file.name.replace(/\.[^.]+$/, "")}-${targetHeight}p.mp4`;
+      link.download = `${videoState.file.name.replace(/\.[^.]+$/, "")}-shopee-${targetHeight}p.mp4`;
       link.classList.remove("disabled");
       link.setAttribute("aria-disabled", "false");
-      updateOutputSummary(targetHeight, preset);
+      updateOutputSummary(targetHeight, preset, outputMetadata);
       setVideoProgress(1, "Conversion siap. Download MP4 tersedia.");
-      setVideoStatus("profit", "Conversion siap. Download MP4, kemudian workspace akan reset.");
+      setVideoStatus(safe.pass ? "profit" : "watch", safe.pass ? "Conversion siap dan resolution Shopee-safe." : "Conversion siap, tapi resolution masih perlu disemak.");
     } catch (error) {
       clearVideoOutput();
       await deleteVirtualVideoFiles();
