@@ -3,6 +3,8 @@
 
   const STORAGE_KEY = "shopeeDashboardSnapshots:v1";
   const CORE_VERSION = "1.0.0";
+  const APP_BUILD_VERSION = "video-queue-v10";
+  const SCRIPT_BUILD_VERSION = typeof document !== "undefined" && document.currentScript ? document.currentScript.dataset.appBuild || "" : "";
   const FFMPEG_VERSION = "0.12.15";
   const FFMPEG_CORE_VERSION = "0.12.10";
   const FFMPEG_LOCAL_SCRIPT = "./vendor/ffmpeg/ffmpeg.js";
@@ -1901,6 +1903,64 @@
     return QUALITY_PRESETS[value] ? value : "balanced";
   }
 
+  function requiredVideoElementIds() {
+    return [
+      "videoFileInput",
+      "videoQueueList",
+      "videoQueueCount",
+      "convertVideoBtn",
+      "resetVideoBtn",
+      "videoStatus",
+      "videoLog",
+      "videoOutputSummary",
+      "inputVideoPreview"
+    ];
+  }
+
+  function videoBootMessage(detail) {
+    return `App update belum lengkap. Refresh/clear cache sekali. ${detail || ""}`.trim();
+  }
+
+  function showVideoBootIssue(detail) {
+    const message = videoBootMessage(detail);
+    const panel = document.getElementById("videoStatus");
+    if (panel) {
+      panel.className = "status-panel loss";
+      const textNode = panel.querySelector("span");
+      if (textNode) textNode.textContent = message;
+      else panel.textContent = message;
+    }
+    const log = document.getElementById("videoLog");
+    if (log) log.textContent = message;
+    requiredVideoElementIds().forEach((id) => {
+      const element = document.getElementById(id);
+      if (element && "disabled" in element) element.disabled = true;
+    });
+    const queueList = document.getElementById("videoQueueList");
+    if (queueList) queueList.innerHTML = `<div class="empty-state">${htmlEscape(message)}</div>`;
+    const outputSummary = document.getElementById("videoOutputSummary");
+    if (outputSummary) {
+      outputSummary.className = "upload-summary active";
+      outputSummary.innerHTML = `<div class="upload-stat"><span>Cache</span><strong>Refresh needed</strong><small>${htmlEscape(message)}</small></div>`;
+    }
+    return false;
+  }
+
+  function validateVideoConverterBoot() {
+    const missing = requiredVideoElementIds().filter((id) => !document.getElementById(id));
+    if (missing.length) {
+      return showVideoBootIssue(`Missing UI: ${missing.join(", ")}.`);
+    }
+    const domBuild = document.body.dataset.appBuild || (document.querySelector("meta[name='app-build']") || {}).content || "";
+    if (domBuild && domBuild !== APP_BUILD_VERSION) {
+      return showVideoBootIssue(`HTML ${domBuild}, JS ${APP_BUILD_VERSION}.`);
+    }
+    if (SCRIPT_BUILD_VERSION && SCRIPT_BUILD_VERSION !== APP_BUILD_VERSION) {
+      return showVideoBootIssue(`Script ${SCRIPT_BUILD_VERSION}, JS ${APP_BUILD_VERSION}.`);
+    }
+    return true;
+  }
+
   async function convertQueueItem(item, index, targetHeight, preset) {
     const startedAt = performance.now();
     const quality = QUALITY_PRESETS[preset];
@@ -1994,6 +2054,7 @@
   }
 
   function initVideoConverter() {
+    if (!validateVideoConverterBoot()) return false;
     const input = document.getElementById("videoFileInput");
     const convertBtn = document.getElementById("convertVideoBtn");
     const resetBtn = document.getElementById("resetVideoBtn");
@@ -2027,6 +2088,7 @@
         event.preventDefault();
       }
     });
+    return true;
   }
 
   function initDashboard() {
@@ -2040,10 +2102,10 @@
     document.querySelectorAll("[data-page-target]").forEach((button) => {
       button.addEventListener("click", () => setActivePage(button.dataset.pageTarget));
     });
-    initVideoConverter();
+    const videoReady = initVideoConverter();
     renderSnapshots(null);
     clearCurrentAnalysisUi();
-    renderVideoMetadata();
+    if (videoReady) renderVideoWorkspace();
 
     fileInput.addEventListener("change", () => updateFileList(fileInput.files || []));
 
@@ -2096,6 +2158,7 @@
 
   const core = {
     CORE_VERSION,
+    APP_BUILD_VERSION,
     parseCsv,
     detectFile,
     analyzeUploads,

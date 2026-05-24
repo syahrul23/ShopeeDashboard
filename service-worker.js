@@ -1,9 +1,10 @@
-const CACHE_NAME = "shopee-dashboard-v9";
+const APP_BUILD_VERSION = "video-queue-v10";
+const CACHE_NAME = "shopee-dashboard-v10";
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css",
-  "./app.js",
+  `./styles.css?v=${APP_BUILD_VERSION}`,
+  `./app.js?v=${APP_BUILD_VERSION}`,
   "./vendor/ffmpeg/ffmpeg.js",
   "./vendor/ffmpeg/814.ffmpeg.js",
   "./manifest.webmanifest",
