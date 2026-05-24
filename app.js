@@ -3,7 +3,7 @@
 
   const STORAGE_KEY = "shopeeDashboardSnapshots:v1";
   const CORE_VERSION = "1.0.0";
-  const APP_BUILD_VERSION = "click-quality-v11";
+  const APP_BUILD_VERSION = "outbound-traffic-v12";
   const SCRIPT_BUILD_VERSION = typeof document !== "undefined" && document.currentScript ? document.currentScript.dataset.appBuild || "" : "";
   const FFMPEG_VERSION = "0.12.15";
   const FFMPEG_CORE_VERSION = "0.12.10";
@@ -279,10 +279,11 @@
   }
 
   function actionForAd(row, totalSpend) {
+    const trafficClicks = row.trafficClicks || 0;
     if (!row.spend && row.expectedCommission > 0) {
       return { label: "Tracking Only", tone: "tracking", note: "Ada komisyen tetapi tiada Ads row dipadankan." };
     }
-    if (row.commissionRoas >= 1 && (row.orders >= 2 || row.linkClicks >= 100)) {
+    if (row.commissionRoas >= 1 && (row.orders >= 2 || trafficClicks >= 100)) {
       return { label: "Scale", tone: "scale", note: "ROAS komisyen sudah lepas break-even." };
     }
     if (row.expectedCommission > 0) {
@@ -295,7 +296,7 @@
       }
       return { label: "Optimize", tone: "optimize", note: "Ada order, tapi belum cukup dekat break-even." };
     }
-    if (row.spend >= 5 || row.linkClicks >= 40) {
+    if (row.spend >= 5 || trafficClicks >= 40) {
       return { label: "Pause/Kill", tone: "pause", note: "Spend/klik sudah jalan tanpa komisyen." };
     }
     return { label: "Observe", tone: "observe", note: "Data masih kecil." };
@@ -435,13 +436,16 @@
   function computeAnalysis(adsRows, commissionRows, meta) {
     const adsByAd = new Map();
     const missingClicksAllFiles = meta.missingClicksAllFiles || [];
+    const missingOutboundFiles = meta.missingOutboundFiles || [];
     const clicksAllAvailable = adsRows.length > 0 && !missingClicksAllFiles.length;
+    const outboundAvailable = adsRows.length > 0 && !missingOutboundFiles.length;
     const adsTotals = {
       spend: 0,
       impressions: 0,
       reach: 0,
       linkClicks: 0,
-      clicksAll: 0
+      clicksAll: 0,
+      outboundClicks: 0
     };
 
     adsRows.forEach((row) => {
@@ -452,13 +456,15 @@
         impressions: 0,
         reach: 0,
         linkClicks: 0,
-        clicksAll: 0
+        clicksAll: 0,
+        outboundClicks: 0
       };
       current.spend += parseNumber(getField(row, "Amount spent (MYR)"));
       current.impressions += parseNumber(getField(row, "Impressions"));
       current.reach += parseNumber(getField(row, "Reach"));
       current.linkClicks += parseNumber(getField(row, "Link clicks"));
       current.clicksAll += parseNumber(getField(row, "Clicks (all)"));
+      current.outboundClicks += parseNumber(getField(row, "Outbound clicks"));
       adsByAd.set(adNo, current);
     });
 
@@ -468,6 +474,7 @@
       adsTotals.reach += row.reach;
       adsTotals.linkClicks += row.linkClicks;
       adsTotals.clicksAll += row.clicksAll;
+      adsTotals.outboundClicks += row.outboundClicks;
     });
 
     const expectedRows = [];
@@ -507,9 +514,11 @@
         impressions: 0,
         reach: 0,
         linkClicks: 0,
-        clicksAll: 0
+        clicksAll: 0,
+        outboundClicks: 0
       };
       const group = commissionByAd.get(adNo) || groupInit();
+      const trafficClicks = outboundAvailable ? ads.outboundClicks : ads.linkClicks;
       const row = {
         adNo,
         spend: ads.spend,
@@ -517,10 +526,19 @@
         reach: ads.reach,
         linkClicks: ads.linkClicks,
         clicksAll: ads.clicksAll,
+        outboundClicks: ads.outboundClicks,
         clicksAllAvailable,
+        outboundAvailable,
         ctrLink: safeDivide(ads.linkClicks, ads.impressions),
         linkClickRate: clicksAllAvailable ? safeDivide(ads.linkClicks, ads.clicksAll) : 0,
         cpcLink: safeDivide(ads.spend, ads.linkClicks),
+        outboundCtr: outboundAvailable ? safeDivide(ads.outboundClicks, ads.impressions) : 0,
+        outboundCpc: outboundAvailable ? safeDivide(ads.spend, ads.outboundClicks) : 0,
+        linkOutboundGap: outboundAvailable ? ads.linkClicks - ads.outboundClicks : 0,
+        trafficClicks,
+        trafficCtr: outboundAvailable ? safeDivide(ads.outboundClicks, ads.impressions) : safeDivide(ads.linkClicks, ads.impressions),
+        trafficCpc: safeDivide(ads.spend, trafficClicks),
+        trafficSource: outboundAvailable ? "outbound" : "link",
         cpm: safeDivide(ads.spend, ads.impressions) * 1000,
         orders: group.orders.size,
         items: group.items,
@@ -532,9 +550,9 @@
         commissionRoas: safeDivide(group.expectedCommission, ads.spend),
         gmvRoas: safeDivide(group.purchaseValue, ads.spend),
         roi: safeDivide(group.expectedCommission - ads.spend, ads.spend),
-        epc: safeDivide(group.expectedCommission, ads.linkClicks),
+        epc: safeDivide(group.expectedCommission, trafficClicks),
         cpa: safeDivide(ads.spend, group.orders.size),
-        orderCvr: safeDivide(group.orders.size, ads.linkClicks)
+        orderCvr: safeDivide(group.orders.size, trafficClicks)
       };
       row.action = actionForAd(row, adsTotals.spend);
       return row;
@@ -566,11 +584,12 @@
       const age = String(getField(row, "Age") || "Unknown").trim() || "Unknown";
       const gender = String(getField(row, "Gender") || "Unknown").trim() || "Unknown";
       const key = `${age} | ${gender}`;
-      const current = audience.get(key) || { age, gender, spend: 0, impressions: 0, linkClicks: 0, clicksAll: 0 };
+      const current = audience.get(key) || { age, gender, spend: 0, impressions: 0, linkClicks: 0, clicksAll: 0, outboundClicks: 0 };
       current.spend += parseNumber(getField(row, "Amount spent (MYR)"));
       current.impressions += parseNumber(getField(row, "Impressions"));
       current.linkClicks += parseNumber(getField(row, "Link clicks"));
       current.clicksAll += parseNumber(getField(row, "Clicks (all)"));
+      current.outboundClicks += parseNumber(getField(row, "Outbound clicks"));
       audience.set(key, current);
     });
 
@@ -591,9 +610,17 @@
       .map((row) => ({
         ...row,
         clicksAllAvailable,
+        outboundAvailable,
         ctr: safeDivide(row.linkClicks, row.impressions),
         linkClickRate: clicksAllAvailable ? safeDivide(row.linkClicks, row.clicksAll) : 0,
-        cpc: safeDivide(row.spend, row.linkClicks)
+        cpc: safeDivide(row.spend, row.linkClicks),
+        outboundCtr: outboundAvailable ? safeDivide(row.outboundClicks, row.impressions) : 0,
+        outboundCpc: outboundAvailable ? safeDivide(row.spend, row.outboundClicks) : 0,
+        linkOutboundGap: outboundAvailable ? row.linkClicks - row.outboundClicks : 0,
+        trafficClicks: outboundAvailable ? row.outboundClicks : row.linkClicks,
+        trafficCtr: outboundAvailable ? safeDivide(row.outboundClicks, row.impressions) : safeDivide(row.linkClicks, row.impressions),
+        trafficCpc: outboundAvailable ? safeDivide(row.spend, row.outboundClicks) : safeDivide(row.spend, row.linkClicks),
+        trafficSource: outboundAvailable ? "outbound" : "link"
       }))
       .sort((a, b) => b.spend - a.spend);
 
@@ -601,13 +628,22 @@
 
     const expectedCommission = commissionTotals.expectedCommission;
     const purchaseValue = commissionTotals.purchaseValue;
+    const trafficClicks = outboundAvailable ? adsTotals.outboundClicks : adsTotals.linkClicks;
     const summary = {
       ads: {
         ...adsTotals,
         clicksAllAvailable,
+        outboundAvailable,
         ctrLink: safeDivide(adsTotals.linkClicks, adsTotals.impressions),
         linkClickRate: clicksAllAvailable ? safeDivide(adsTotals.linkClicks, adsTotals.clicksAll) : 0,
         cpcLink: safeDivide(adsTotals.spend, adsTotals.linkClicks),
+        outboundCtr: outboundAvailable ? safeDivide(adsTotals.outboundClicks, adsTotals.impressions) : 0,
+        outboundCpc: outboundAvailable ? safeDivide(adsTotals.spend, adsTotals.outboundClicks) : 0,
+        linkOutboundGap: outboundAvailable ? adsTotals.linkClicks - adsTotals.outboundClicks : 0,
+        trafficClicks,
+        trafficCtr: outboundAvailable ? safeDivide(adsTotals.outboundClicks, adsTotals.impressions) : safeDivide(adsTotals.linkClicks, adsTotals.impressions),
+        trafficCpc: safeDivide(adsTotals.spend, trafficClicks),
+        trafficSource: outboundAvailable ? "outbound" : "link",
         cpm: safeDivide(adsTotals.spend, adsTotals.impressions) * 1000,
         frequency: safeDivide(adsTotals.impressions, adsTotals.reach)
       },
@@ -628,6 +664,13 @@
         level: "warning",
         title: "Clicks (all) missing",
         detail: `${missingClicksAllFiles.join(", ")} tiada column Clicks (all), jadi Total Clicks dan Link/Total % tidak lengkap.`
+      });
+    }
+    if (missingOutboundFiles.length > 0) {
+      issues.push({
+        level: "warning",
+        title: "Outbound clicks missing",
+        detail: `${missingOutboundFiles.join(", ")} tiada column Outbound clicks. Dashboard guna Link clicks sebagai fallback traffic KPI.`
       });
     }
     meta.duplicateAds.forEach((item) => {
@@ -693,6 +736,7 @@
       duplicateAds: [],
       duplicateCommissionDetails: [],
       missingClicksAllFiles: [],
+      missingOutboundFiles: [],
       unknownFiles: []
     };
 
@@ -709,6 +753,7 @@
         }
         adsFingerprints.set(fingerprint, file.name);
         if (!hasColumns(parsed.headers, ["Clicks (all)"])) meta.missingClicksAllFiles.push(file.name);
+        if (!hasColumns(parsed.headers, ["Outbound clicks"])) meta.missingOutboundFiles.push(file.name);
         adsRows.push(...parsed.rows);
         return;
       }
@@ -780,6 +825,28 @@
 
   function formatLinkClickRate(row) {
     return row && row.clicksAllAvailable && row.clicksAll > 0 ? formatPercent(row.linkClickRate) : "-";
+  }
+
+  function formatOutboundClicks(row) {
+    return row && row.outboundAvailable ? formatNumber(row.outboundClicks) : "-";
+  }
+
+  function formatOutboundCtr(row) {
+    return row && row.outboundAvailable ? formatPercent(row.outboundCtr) : "-";
+  }
+
+  function formatOutboundCpc(row) {
+    return row && row.outboundAvailable && row.outboundClicks > 0 ? formatMoney(row.outboundCpc) : "-";
+  }
+
+  function formatTrafficCpc(row) {
+    return row && row.trafficSource === "outbound" ? formatMoney(row.outboundCpc) : formatMoney(row.cpcLink || row.cpc || row.trafficCpc);
+  }
+
+  function formatLinkOutboundGap(row) {
+    if (!row || !row.outboundAvailable) return "-";
+    const gap = row.linkOutboundGap || 0;
+    return `${gap > 0 ? "+" : ""}${formatNumber(gap)}`;
   }
 
   function duplicateDetailText(details) {
@@ -974,7 +1041,9 @@
     document.getElementById("statusMessage").textContent = verdict.text;
 
     document.getElementById("kpiSpend").textContent = formatMoney(summary.ads.spend);
-    document.getElementById("kpiTraffic").textContent = `Link ${formatNumber(summary.ads.linkClicks)} / Total ${formatTotalClicks(summary.ads)} | CPC ${formatMoney(summary.ads.cpcLink)}`;
+    document.getElementById("kpiTraffic").textContent = summary.ads.outboundAvailable
+      ? `Outbound ${formatNumber(summary.ads.outboundClicks)} | Link ${formatNumber(summary.ads.linkClicks)} | CPC Out ${formatMoney(summary.ads.outboundCpc)}`
+      : `Link clicks fallback ${formatNumber(summary.ads.linkClicks)} | CPC Link ${formatMoney(summary.ads.cpcLink)} | Outbound missing`;
     document.getElementById("kpiExpected").textContent = formatMoney(summary.commission.expectedCommission);
     document.getElementById("kpiCompleted").textContent = `Completed ${formatMoney(summary.commission.completedCommission)}`;
     document.getElementById("kpiRoas").textContent = formatDecimal(summary.commission.commissionRoas);
@@ -990,6 +1059,10 @@
 
     const metrics = [
       ["Impressions", formatNumber(summary.ads.impressions), `Reach ${formatNumber(summary.ads.reach)}`],
+      ["Outbound Clicks", formatOutboundClicks(summary.ads), summary.ads.outboundAvailable ? `Link Clicks ${formatNumber(summary.ads.linkClicks)}` : "Missing, guna link fallback"],
+      ["Outbound CTR", formatOutboundCtr(summary.ads), `CTR Link ${formatPercent(summary.ads.ctrLink)}`],
+      ["Outbound CPC", formatOutboundCpc(summary.ads), `CPC Link ${formatMoney(summary.ads.cpcLink)}`],
+      ["Link vs Outbound Gap", formatLinkOutboundGap(summary.ads), "Link clicks - outbound clicks"],
       ["CTR Link", formatPercent(summary.ads.ctrLink), `CPM ${formatMoney(summary.ads.cpm)}`],
       ["Total Clicks", formatTotalClicks(summary.ads), `Link Clicks ${formatNumber(summary.ads.linkClicks)}`],
       ["Link / Total Click", formatLinkClickRate(summary.ads), "Kualiti klik ke Shopee"],
@@ -1012,10 +1085,11 @@
       { label: "Ad", render: (row) => htmlEscape(row.adNo) },
       { label: "Action", render: (row) => badge(row.action) },
       { label: "Spend", num: true, render: (row) => formatMoney(row.spend) },
+      { label: "Outbound Clicks", num: true, render: (row) => formatOutboundClicks(row) },
+      { label: "Outbound CPC", num: true, render: (row) => formatOutboundCpc(row) },
+      { label: "Outbound CTR", num: true, render: (row) => formatOutboundCtr(row) },
       { label: "Link Clicks", num: true, render: (row) => formatNumber(row.linkClicks) },
-      { label: "Total Clicks", num: true, render: (row) => formatTotalClicks(row) },
-      { label: "Link/Total %", num: true, render: (row) => formatLinkClickRate(row) },
-      { label: "CPC", num: true, render: (row) => formatMoney(row.cpcLink) },
+      { label: "Gap", num: true, render: (row) => formatLinkOutboundGap(row) },
       { label: "EPC", num: true, render: (row) => formatMoney(row.epc) },
       { label: "Orders", num: true, render: (row) => formatNumber(row.orders) },
       { label: "Comm", num: true, render: (row) => formatMoney(row.expectedCommission) },
@@ -1072,11 +1146,15 @@
       { label: "Gender", render: (row) => htmlEscape(row.gender) },
       { label: "Spend", num: true, render: (row) => formatMoney(row.spend) },
       { label: "Impr.", num: true, render: (row) => formatNumber(row.impressions) },
+      { label: "Outbound Clicks", num: true, render: (row) => formatOutboundClicks(row) },
+      { label: "Outbound CTR", num: true, render: (row) => formatOutboundCtr(row) },
+      { label: "Outbound CPC", num: true, render: (row) => formatOutboundCpc(row) },
       { label: "Link Clicks", num: true, render: (row) => formatNumber(row.linkClicks) },
+      { label: "Gap", num: true, render: (row) => formatLinkOutboundGap(row) },
       { label: "Total Clicks", num: true, render: (row) => formatTotalClicks(row) },
       { label: "Link/Total %", num: true, render: (row) => formatLinkClickRate(row) },
-      { label: "CTR", num: true, render: (row) => formatPercent(row.ctr) },
-      { label: "CPC", num: true, render: (row) => formatMoney(row.cpc) }
+      { label: "Link CTR", num: true, render: (row) => formatPercent(row.ctr) },
+      { label: "Link CPC", num: true, render: (row) => formatMoney(row.cpc) }
     ], analysis.audience, "Tiada data audience.");
 
     renderIssues(analysis.issues);
@@ -1215,6 +1293,10 @@
     const previous = snapshot.summary || {};
     const metrics = [
       ["Spend", "ads.spend", "money", "neutral"],
+      ["Outbound Clicks", "ads.outboundClicks", "number", "higher"],
+      ["Outbound CTR", "ads.outboundCtr", "percent", "higher"],
+      ["Outbound CPC", "ads.outboundCpc", "money", "lower"],
+      ["Link vs Outbound Gap", "ads.linkOutboundGap", "number", "lower"],
       ["Link Clicks", "ads.linkClicks", "number", "higher"],
       ["Total Clicks", "ads.clicksAll", "number", "higher"],
       ["Link/Total %", "ads.linkClickRate", "percent", "higher"],
@@ -1335,7 +1417,11 @@
           render: (currentRow, previousRow) => `<div class="compare-cell"><strong>${htmlEscape(actionLabel(currentRow && currentRow.action))}</strong><small>Snapshot ${htmlEscape(actionLabel(previousRow && previousRow.action))}</small></div>`
         },
         { label: "Spend", path: "spend", type: "money", direction: "neutral", num: true },
+        { label: "Outbound Clicks", path: "outboundClicks", type: "number", direction: "higher", num: true },
+        { label: "Outbound CPC", path: "outboundCpc", type: "money", direction: "lower", num: true },
+        { label: "Outbound CTR", path: "outboundCtr", type: "percent", direction: "higher", num: true },
         { label: "Link Clicks", path: "linkClicks", type: "number", direction: "higher", num: true },
+        { label: "Gap", path: "linkOutboundGap", type: "number", direction: "lower", num: true },
         { label: "Total Clicks", path: "clicksAll", type: "number", direction: "higher", num: true },
         { label: "Link/Total %", path: "linkClickRate", type: "percent", direction: "higher", num: true },
         { label: "Orders", path: "orders", type: "number", direction: "higher", num: true },
@@ -1411,11 +1497,15 @@
       [
         { label: "Spend", path: "spend", type: "money", direction: "neutral", num: true },
         { label: "Impr.", path: "impressions", type: "number", direction: "higher", num: true },
+        { label: "Outbound Clicks", path: "outboundClicks", type: "number", direction: "higher", num: true },
+        { label: "Outbound CTR", path: "outboundCtr", type: "percent", direction: "higher", num: true },
+        { label: "Outbound CPC", path: "outboundCpc", type: "money", direction: "lower", num: true },
         { label: "Link Clicks", path: "linkClicks", type: "number", direction: "higher", num: true },
+        { label: "Gap", path: "linkOutboundGap", type: "number", direction: "lower", num: true },
         { label: "Total Clicks", path: "clicksAll", type: "number", direction: "higher", num: true },
         { label: "Link/Total %", path: "linkClickRate", type: "percent", direction: "higher", num: true },
-        { label: "CTR", path: "ctr", type: "percent", direction: "higher", num: true },
-        { label: "CPC", path: "cpc", type: "money", direction: "lower", num: true }
+        { label: "Link CTR", path: "ctr", type: "percent", direction: "higher", num: true },
+        { label: "Link CPC", path: "cpc", type: "money", direction: "lower", num: true }
       ],
       "Tiada data audience."
     );
