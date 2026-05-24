@@ -161,14 +161,31 @@
   }
 
   function commissionKey(row) {
-    const parts = [
-      getField(row, "Order id"),
-      getField(row, "Conversion id"),
-      getField(row, "Item id"),
-      getField(row, "Model id")
-    ].map((part) => String(part || "").trim());
-    const useful = parts.filter(Boolean);
-    return useful.length ? useful.join("|") : JSON.stringify(row);
+    const orderId = String(getField(row, "Order id") || "").trim();
+    const itemId = String(getField(row, "Item id") || "").trim();
+    const itemName = String(getField(row, "Item Name") || "").trim().toLowerCase().replace(/\s+/g, " ");
+    const purchase = parseNumber(getField(row, "Purchase Value(RM)")).toFixed(4);
+    const commission = parseNumber(getField(row, "Affiliate Net Commission(RM)")).toFixed(4);
+    if (orderId && itemId) return `order-item|${orderId}|${itemId}|${purchase}|${commission}`;
+    if (orderId && itemName) return `order-name|${orderId}|${itemName}|${purchase}|${commission}`;
+    const conversionId = String(getField(row, "Conversion id") || "").trim();
+    if (orderId || conversionId) return `order-conversion|${orderId}|${conversionId}|${purchase}|${commission}`;
+    return simpleHash(JSON.stringify(row));
+  }
+
+  function commissionRowQuality(row) {
+    const keys = Object.keys(row || {});
+    const nonEmpty = keys.filter((key) => String(row[key] || "").trim()).length;
+    let quality = nonEmpty;
+    if (getField(row, "Affiliate Item Status") || getField(row, "Order Status")) quality += 30;
+    if (getField(row, "Attribution Type")) quality += 12;
+    if (getField(row, "Complete Time")) quality += 8;
+    if (getField(row, "Shop id")) quality += 5;
+    return quality;
+  }
+
+  function duplicateOrderId(row) {
+    return String(getField(row, "Order id") || "").trim() || "unknown-order";
   }
 
   function groupInit() {
@@ -576,8 +593,15 @@
     meta.duplicateAds.forEach((item) => {
       issues.push({ level: "warning", title: "Duplicate Ads CSV ignored", detail: `${item.name} sama seperti ${item.original}.` });
     });
-    if (meta.duplicateCommissionRows > 0) {
-      issues.push({ level: "warning", title: "Duplicate commission rows ignored", detail: `${meta.duplicateCommissionRows} row commission duplicate dibuang.` });
+    if (meta.duplicateCommissionDetails.length > 0) {
+      const inside = meta.duplicateCommissionDetails.filter((item) => item.scope === "inside");
+      const across = meta.duplicateCommissionDetails.filter((item) => item.scope === "across");
+      if (inside.length > 0) {
+        issues.push({ level: "warning", title: "Duplicate inside uploaded commission file", detail: duplicateDetailText(inside) });
+      }
+      if (across.length > 0) {
+        issues.push({ level: "warning", title: "Duplicate across multiple commission files", detail: duplicateDetailText(across) });
+      }
     }
     meta.unknownFiles.forEach((name) => {
       issues.push({ level: "warning", title: "Unknown CSV", detail: `${name} tidak match schema Ads atau Commission.` });
@@ -607,6 +631,7 @@
       version: CORE_VERSION,
       createdAt: new Date().toISOString(),
       files: meta.files,
+      uploadSummary: buildUploadSummary(meta, adsRows, commissionRows),
       summary,
       perAd,
       attribution,
@@ -620,17 +645,17 @@
 
   function analyzeUploads(filePayloads) {
     const adsFingerprints = new Map();
-    const commissionKeys = new Set();
+    const commissionRecords = new Map();
     const adsRows = [];
     const commissionRows = [];
     const meta = {
       files: [],
       duplicateAds: [],
-      duplicateCommissionRows: 0,
+      duplicateCommissionDetails: [],
       unknownFiles: []
     };
 
-    filePayloads.forEach((file) => {
+    filePayloads.forEach((file, fileIndex) => {
       const parsed = parseCsv(file.text);
       const type = detectFile(parsed);
       meta.files.push({ name: file.name, type, rows: parsed.rows.length });
@@ -647,13 +672,39 @@
       }
 
       if (type === "commission") {
-        parsed.rows.forEach((row) => {
+        parsed.rows.forEach((row, rowIndex) => {
           const key = commissionKey(row);
-          if (commissionKeys.has(key)) {
-            meta.duplicateCommissionRows += 1;
+          const previous = commissionRecords.get(key);
+          if (previous) {
+            const scope = previous.fileIndex === fileIndex ? "inside" : "across";
+            const originalFile = previous.fileName;
+            const originalRow = previous.rowNumber;
+            const currentQuality = commissionRowQuality(row);
+            const previousQuality = commissionRowQuality(previous.row);
+            if (currentQuality > previousQuality) {
+              commissionRows[previous.outputIndex] = row;
+              previous.row = row;
+              previous.fileName = file.name;
+              previous.rowNumber = rowIndex + 2;
+              previous.fileIndex = fileIndex;
+            }
+            meta.duplicateCommissionDetails.push({
+              scope,
+              orderId: duplicateOrderId(row),
+              currentFile: file.name,
+              currentRow: rowIndex + 2,
+              originalFile,
+              originalRow
+            });
             return;
           }
-          commissionKeys.add(key);
+          commissionRecords.set(key, {
+            row,
+            fileName: file.name,
+            fileIndex,
+            rowNumber: rowIndex + 2,
+            outputIndex: commissionRows.length
+          });
           commissionRows.push(row);
         });
         return;
@@ -679,6 +730,30 @@
 
   function formatPercent(value) {
     return `${formatDecimal((Number.isFinite(value) ? value : 0) * 100)}%`;
+  }
+
+  function duplicateDetailText(details) {
+    const orderIds = [...new Set(details.map((item) => item.orderId).filter(Boolean))];
+    const shown = orderIds.slice(0, 8).join(", ");
+    const more = orderIds.length > 8 ? ` dan ${orderIds.length - 8} lagi` : "";
+    const filePairs = [...new Set(details.map((item) => `${item.originalFile} -> ${item.currentFile}`))].slice(0, 3).join("; ");
+    return `${details.length} row duplicate dibuang. Order: ${shown || "unknown"}${more}. File: ${filePairs}.`;
+  }
+
+  function buildUploadSummary(meta, adsRows, commissionRows) {
+    const adsSelected = meta.files.filter((file) => file.type === "ads").length;
+    const commissionSelected = meta.files.filter((file) => file.type === "commission").length;
+    const unknownSelected = meta.files.filter((file) => file.type === "unknown").length;
+    return {
+      adsFilesSelected: adsSelected,
+      adsFilesUsed: adsSelected - meta.duplicateAds.length,
+      adsRowsUsed: adsRows.length,
+      commissionFilesSelected: commissionSelected,
+      commissionRowsUsed: commissionRows.length,
+      duplicateAdsIgnored: meta.duplicateAds.length,
+      duplicateCommissionRowsIgnored: meta.duplicateCommissionDetails.length,
+      unknownFiles: unknownSelected
+    };
   }
 
   function formatDuration(ms) {
@@ -756,6 +831,7 @@
       ? `Setiap RM1 ads baru balik ${formatMoney(summary.commission.commissionRoas)} komisyen.`
       : "Campaign sudah lepas modal berdasarkan expected commission.";
     document.getElementById("summaryLine").textContent = line;
+    renderUploadSummary(analysis.uploadSummary);
 
     const metrics = [
       ["Impressions", formatNumber(summary.ads.impressions), `Reach ${formatNumber(summary.ads.reach)}`],
@@ -855,6 +931,48 @@
     container.innerHTML = issues.map((issue) => (
       `<div class="issue-item ${htmlEscape(issue.level)}"><strong>${htmlEscape(issue.title)}</strong><span>${htmlEscape(issue.detail)}</span></div>`
     )).join("");
+  }
+
+  function renderUploadSummary(summary) {
+    const container = document.getElementById("uploadSummary");
+    if (!container) return;
+    if (!summary) {
+      container.className = "upload-summary";
+      container.innerHTML = "";
+      return;
+    }
+    container.className = "upload-summary active";
+    const stats = [
+      ["Ads Files Used", `${summary.adsFilesUsed}/${summary.adsFilesSelected}`, `${summary.adsRowsUsed} rows`],
+      ["Commission Files", `${summary.commissionFilesSelected}`, `${summary.commissionRowsUsed} rows used`],
+      ["Duplicate Ignored", `${summary.duplicateAdsIgnored + summary.duplicateCommissionRowsIgnored}`, `${summary.duplicateCommissionRowsIgnored} commission rows`],
+      ["Unknown Files", `${summary.unknownFiles}`, "Rejected CSV"]
+    ];
+    container.innerHTML = stats.map(([label, value, note]) => (
+      `<div class="upload-stat"><span>${htmlEscape(label)}</span><strong>${htmlEscape(value)}</strong><small>${htmlEscape(note)}</small></div>`
+    )).join("");
+  }
+
+  function clearCurrentAnalysisUi() {
+    document.getElementById("statusPanel").className = "status-panel muted";
+    document.getElementById("statusMessage").textContent = "Belum ada data dianalisis.";
+    document.getElementById("saveSnapshotBtn").disabled = true;
+    ["kpiSpend", "kpiTraffic", "kpiExpected", "kpiCompleted", "kpiRoas", "kpiRoi", "kpiBeRoas", "kpiRate"].forEach((id) => {
+      document.getElementById(id).textContent = "-";
+    });
+    document.getElementById("summaryLine").textContent = "Upload CSV untuk mula.";
+    document.getElementById("summaryGrid").innerHTML = "";
+    document.getElementById("adTable").innerHTML = "";
+    document.getElementById("attributionTable").innerHTML = "";
+    document.getElementById("categoryTable").innerHTML = "";
+    document.getElementById("holdSummary").innerHTML = "";
+    document.getElementById("holdTable").innerHTML = "";
+    document.getElementById("audienceTable").innerHTML = "";
+    document.getElementById("issuesList").innerHTML = `<p class="empty-state">Belum ada analysis aktif.</p>`;
+    document.getElementById("snapshotComparePanel").innerHTML = "";
+    document.getElementById("snapshotName").value = "";
+    document.getElementById("snapshotCompare").value = "";
+    renderUploadSummary(null);
   }
 
   function loadSnapshots() {
@@ -973,6 +1091,7 @@
     const compareSelect = document.getElementById("snapshotCompare");
 
     renderSnapshots(null);
+    clearCurrentAnalysisUi();
 
     fileInput.addEventListener("change", () => updateFileList(fileInput.files || []));
 
@@ -1014,21 +1133,7 @@
       currentAnalysis = null;
       fileInput.value = "";
       updateFileList([]);
-      document.getElementById("statusPanel").className = "status-panel muted";
-      document.getElementById("statusMessage").textContent = "Belum ada data dianalisis.";
-      document.getElementById("saveSnapshotBtn").disabled = true;
-      ["kpiSpend", "kpiTraffic", "kpiExpected", "kpiCompleted", "kpiRoas", "kpiRoi", "kpiBeRoas", "kpiRate"].forEach((id) => {
-        document.getElementById(id).textContent = "-";
-      });
-      document.getElementById("summaryLine").textContent = "Upload CSV untuk mula.";
-      document.getElementById("summaryGrid").innerHTML = "";
-      document.getElementById("adTable").innerHTML = "";
-      document.getElementById("attributionTable").innerHTML = "";
-      document.getElementById("categoryTable").innerHTML = "";
-      document.getElementById("holdSummary").innerHTML = "";
-      document.getElementById("holdTable").innerHTML = "";
-      document.getElementById("audienceTable").innerHTML = "";
-      document.getElementById("issuesList").innerHTML = "";
+      clearCurrentAnalysisUi();
       renderSnapshots(null);
     });
 

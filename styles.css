@@ -177,6 +177,37 @@ main {
   gap: 8px;
 }
 
+.upload-summary {
+  grid-column: 1 / -1;
+  display: none;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.upload-summary.active {
+  display: grid;
+}
+
+.upload-stat {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 10px;
+}
+
+.upload-stat span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.upload-stat strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 16px;
+}
+
 .file-pill {
   border: 1px solid var(--line);
   background: #fbfcfd;
@@ -466,6 +497,7 @@ th.num {
 
   .kpi-grid,
   .metric-grid,
+  .upload-summary,
   .split-section {
     grid-template-columns: 1fr;
   }
